@@ -660,6 +660,9 @@ function render(drawing = false) {
 const HAND = {
   edge: 0.12,               // ignore this much of each camera edge, so you can reach every corner of the page
   pinchOn: 0.3, pinchOff: 0.45,   // pinch closes below / opens above this (thumb–index gap ÷ hand size)
+  releaseMs: 150,                 // fingers must stay open this long to lift the pen (fast moves blur the
+                                  //   camera image, so a pinch can look open for a frame or two)
+  lostGraceMs: 250,               // if the camera loses your hand for less than this, carry on as if it hadn't
   tapMs: 600, tapMovePx: 50,      // a "click" = pinch released within 600 ms, moving less than 50 px
   fistMs: 1000,                   // hold a fist this long to clear (after it's confirmed)
   fistConfirmMs: 300,             // a fist must be seen this long before it counts (filters quick blips)
@@ -778,16 +781,25 @@ function canvasPointFor(p) {
 // ----- Steady pen -----
 // 1. A "One Euro" filter steadies the hand: lots of smoothing when you move slowly (that's when
 //    shake shows), little when you move fast (so the pointer doesn't lag behind big moves).
-// 2. While the pen is down, the pen moves only a fraction of what your hand moves (the "Pen speed"
-//    setting), so small shakes become tiny on the graph. After you lift the pen it stays where you
-//    stopped while it's over the graph; once it leaves the graph it glides back under your hand,
-//    so you can still reach every button.
+// 2. While the pen is down, how far the pen moves depends on how FAST your hand moves (like a mouse):
+//    slow, careful movement (and shake) is scaled down to the "Pen speed" setting, so it stays tiny;
+//    a quick sweep moves the pen 1:1, so you can still draw across the whole graph at a normal pace.
+//    After you lift the pen it stays where you stopped while it's over the graph; once it leaves the
+//    graph it glides back under your hand, so you can still reach every button.
 const PEN = {
   pointFilter: { minCutoff: 1.5, beta: 0.006 },   // pointing at buttons: responsive
-  drawFilter:  { minCutoff: 0.7, beta: 0.003 },   // drawing: steadier (lower = smoother, more lag)
+  drawFilter:  { minCutoff: 1.0, beta: 0.006 },   // drawing: a bit steadier (lower = smoother, more lag)
+  fastGain: 1.0,          // a quick sweep moves the pen 1:1 with the hand
+  slowSpeed: 0.03,        // hand speeds (screen widths per second) at or below this use the slow pen…
+  fastSpeed: 0.18,        // …at or above this (a relaxed sweep) use fastGain; in between it blends
   returnMs: 250,          // off the graph, the pointer catches up with your hand over ~this long
 };
-const penGain = () => parseFloat($("penSpeed").value);     // pen distance ÷ hand distance while drawing
+const slowGain = () => parseFloat($("penSpeed").value);    // pen distance ÷ hand distance when moving slowly
+function penGain(speed) {                                  // speed in screen widths per second
+  const u = Math.min(1, Math.max(0, (speed - PEN.slowSpeed) / (PEN.fastSpeed - PEN.slowSpeed)));
+  return slowGain() + (PEN.fastGain - slowGain()) * u * u * (3 - 2 * u);
+}
+let handSpeed = 0;               // smoothed hand speed, screen widths per second
 class OneEuro {                  // https://gery.casiez.net/1euro/ (one axis)
   reset() { this.x = this.dx = this.t = null; }
   filter(x, tSec, { minCutoff, beta }) {
@@ -809,14 +821,16 @@ const penIsDown = () => (pinching && !!pinchStart?.onCanvas) || spaceHeld;
 // Move the page pointer to the thumb tip, and work out where that is on the graph (if over it).
 function movePointer(tip, now) {
   const raw = viewportPointFor(tip);
-  if (!pointer) { steadyX.reset(); steadyY.reset(); handAt = null; penOffset = { x: 0, y: 0 }; }
+  if (!pointer) { steadyX.reset(); steadyY.reset(); handAt = null; penOffset = { x: 0, y: 0 }; handSpeed = 0; }
   const down = penIsDown(), opts = down ? PEN.drawFilter : PEN.pointFilter;
   const hand = { x: steadyX.filter(raw.x, now / 1000, opts), y: steadyY.filter(raw.y, now / 1000, opts) };
   if (handAt) {
     const dt = Math.max(0, now - lastMoveT);
-    if (down) {                  // pen down: only move a fraction of the hand's movement
-      const k = penGain() - 1;
-      penOffset.x += k * (hand.x - handAt.x); penOffset.y += k * (hand.y - handAt.y);
+    const dx = hand.x - handAt.x, dy = hand.y - handAt.y;
+    if (dt > 0) handSpeed += 0.5 * (Math.hypot(dx, dy) / innerWidth / (dt / 1000) - handSpeed);
+    if (down) {                  // pen down: slow movement is scaled down, fast movement isn't
+      const k = penGain(handSpeed) - 1;
+      penOffset.x += k * dx; penOffset.y += k * dy;
     } else if (!cursor) {        // pen up and off the graph: glide back under the hand (to reach buttons)
       const decay = Math.exp(-dt / PEN.returnMs);
       penOffset.x *= decay; penOffset.y *= decay;
@@ -867,8 +881,12 @@ function oneHand(lm, now) {
   mode = "point";
   const wasPinching = pinching;
   const ratio = pinchRatio(lm), pointerCurled = curled(lm, 8, 5);   // thumb on a curled finger = fist, not pinch
-  if (!pinching && ratio < HAND.pinchOn && !pointerCurled) pinching = true;
-  else if (pinching && (ratio > HAND.pinchOff || pointerCurled)) pinching = false;
+  const open = ratio > HAND.pinchOff || pointerCurled;
+  if (!pinching && ratio < HAND.pinchOn && !pointerCurled) { pinching = true; openSince = 0; }
+  else if (pinching && open) {                                // only lift the pen once the fingers STAY open
+    if (!openSince) openSince = now;
+    if (now - openSince >= HAND.releaseMs) pinching = false;
+  } else openSince = 0;
   if (pinching && !wasPinching) pinchStart = { t: now, x: pointer.x, y: pointer.y, onCanvas: !!cursor };
   if (!pinching && wasPinching) pinchEndedAt = now;
   if (!pinching && wasPinching && pinchStart) {               // pinch released: was it a quick tap?
@@ -878,8 +896,10 @@ function oneHand(lm, now) {
   }
 }
 
+let openSince = 0;               // when the fingers opened during a pinch (0 = they're closed)
+let handSeenAt = -Infinity;      // when the main hand was last seen
 function noHands() {
-  mode = "none"; pointer = null; cursor = null; pinching = false; pinchStart = null; fistSince = 0;
+  mode = "none"; pointer = null; cursor = null; pinching = false; pinchStart = null; fistSince = 0; openSince = 0;
 }
 
 // Show the page pointer (hidden over the graph, where the graph's own cursor shows) and highlight what it would click.
@@ -924,7 +944,8 @@ async function start() {
 function step(allHands, now) {
   const hands = frontHands(allHands, now);                    // drop people in the background, closest first
   const mainHand = pickMainHand(hands, now);
-  if (mainHand) oneHand(mainHand.lm, now);                    // only the main hand points, draws, and clicks
+  if (mainHand) { handSeenAt = now; oneHand(mainHand.lm, now); }  // only the main hand points, draws, and clicks
+  else if (pointer && now - handSeenAt < HAND.lostGraceMs) {}     // tracking blink: keep the pen as it was
   else noHands();
   updatePointerUI();
 }
