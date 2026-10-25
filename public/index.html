@@ -4,43 +4,126 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Function Tracer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@600;800&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#fdfbf6; --ink:#1f2933; --grid:#e3e7ec; --axis:#7b8794; --trace:#2563eb; --answer:#16a34a; --cursor:#f97316; }
-  body.contrast { --bg:#000; --ink:#fff; --grid:#333; --axis:#ccc; --trace:#ffd400; --answer:#00e5ff; --cursor:#ff4fd8; }
+  :root {
+    --bg:#fffdf7; --ink:#1f2a44; --grid:#cfe3f7; --axis:#5b6b8c; --trace:#7c3aed; --answer:#16a34a; --cursor:#f97316;
+    --sky1:#dff3ff; --sky2:#fff4d6; --card:#ffffff; --shadow:#1f2a4422;
+    --red:#ff6b6b; --yellow:#ffc93c; --green:#3ccf7a; --blue:#4d96ff; --purple:#9b5de5;
+  }
+  body.contrast {
+    --bg:#000; --ink:#fff; --grid:#333; --axis:#ccc; --trace:#ffd400; --answer:#00e5ff; --cursor:#ff4fd8;
+    --sky1:#000; --sky2:#000; --card:#111; --shadow:#0000;
+    --red:#ff4fd8; --yellow:#ffd400; --green:#00e5ff; --blue:#ffd400; --purple:#ff4fd8;
+  }
   * { box-sizing:border-box; }
-  body { margin:0; font-family:system-ui, sans-serif; background:var(--bg); color:var(--ink); }
-  header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 16px; }
-  #eq { font-size:2rem; font-weight:700; margin-right:auto; }
-  button, select, label { font-size:1.1rem; }
-  button { padding:10px 18px; border-radius:10px; border:2px solid var(--ink); background:transparent; color:var(--ink); cursor:pointer; }
-  #stage { position:relative; width:min(800px, 100vw); aspect-ratio:4/3; margin:0 auto; }
+  body {
+    margin:0; min-height:100vh; font-family:"Nunito", system-ui, sans-serif; color:var(--ink);
+    background:
+      radial-gradient(circle at 10% 15%, #ffffff99 0 60px, transparent 61px),
+      radial-gradient(circle at 88% 10%, #ffffff99 0 80px, transparent 81px),
+      linear-gradient(180deg, var(--sky1), var(--sky2));
+    background-attachment:fixed;
+  }
+  main { max-width:860px; margin:0 auto; padding:0 16px 32px; }
+
+  .top { display:flex; align-items:center; justify-content:space-between; gap:12px; max-width:860px; margin:0 auto; padding:16px; }
+  .brand { font-family:"Fredoka", sans-serif; font-weight:700; font-size:1.8rem; letter-spacing:.5px; }
+  .brand span:nth-child(1){color:var(--red)} .brand span:nth-child(2){color:var(--blue)}
+  #dots { display:flex; gap:8px; }
+  #dots i { width:16px; height:16px; border-radius:50%; background:var(--card); border:3px solid var(--ink); opacity:.35; }
+  #dots i.done { background:var(--green); opacity:1; }
+  #dots i.now { background:var(--yellow); opacity:1; transform:scale(1.25); }
+
+  .eq-card {
+    display:flex; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap;
+    background:var(--card); border:4px solid var(--ink); border-radius:24px; padding:12px 20px;
+    box-shadow:0 6px 0 var(--ink);
+  }
+  .eq-label { font-family:"Fredoka", sans-serif; font-size:1.2rem; background:var(--yellow); color:#1f2a44; padding:4px 14px; border-radius:999px; }
+  #eq { font-family:"Fredoka", sans-serif; font-size:2.4rem; font-weight:700; color:var(--purple); }
+
+  .actions { display:flex; justify-content:center; gap:14px; flex-wrap:wrap; margin:18px 0; }
+  button {
+    font-family:"Fredoka", sans-serif; font-size:1.3rem; font-weight:600; padding:12px 26px;
+    border-radius:18px; border:4px solid var(--ink); color:#1f2a44; cursor:pointer;
+    box-shadow:0 5px 0 var(--ink); transition:transform .08s, box-shadow .08s;
+  }
+  button:hover { transform:translateY(-2px); box-shadow:0 7px 0 var(--ink); }
+  button:active { transform:translateY(4px); box-shadow:0 1px 0 var(--ink); }
+  #clear { background:var(--yellow); } #check { background:var(--green); } #next { background:var(--blue); color:#fff; }
+  body.contrast button { color:#000; }
+
+  #stage {
+    position:relative; width:100%; aspect-ratio:4/3; margin:0 auto; overflow:hidden;
+    border:5px solid var(--ink); border-radius:28px; background:var(--bg); box-shadow:0 8px 0 var(--ink);
+  }
   #cam, #board { position:absolute; inset:0; width:100%; height:100%; }
   #cam { transform:scaleX(-1); opacity:.18; object-fit:cover; }
-  #result { text-align:center; font-size:1.4rem; min-height:2.5em; padding:8px 16px; }
-  #status { text-align:center; opacity:.7; }
+
+  #result {
+    position:relative; display:flex; align-items:center; gap:14px; margin:26px 0 8px; padding:14px 20px;
+    background:var(--card); border:4px solid var(--ink); border-radius:22px; font-size:1.3rem; font-weight:800;
+  }
+  #result:empty { display:none; }
+  #result::before { content:"🦉"; font-size:2.6rem; }
+  #result .score { flex:none; font-family:"Fredoka", sans-serif; background:var(--yellow); color:#1f2a44; border-radius:16px; padding:6px 12px; text-align:center; line-height:1.1; }
+  #result .score small { display:block; font-size:.95rem; }
+
+  #status {
+    text-align:center; margin:18px auto 0; max-width:620px; padding:10px 16px; font-size:1.05rem;
+    background:#fff7b0; color:#1f2a44; border-radius:6px; transform:rotate(-1deg); box-shadow:0 4px 10px var(--shadow);
+  }
+  body.contrast { background:#000; }
+  body.contrast #status { background:#222; color:#fff; }
+
+  .settings { display:flex; flex-wrap:wrap; justify-content:center; gap:10px; margin-top:22px; }
+  .settings label, .settings select {
+    font-size:1rem; font-weight:800; background:var(--card); color:var(--ink);
+    border:3px solid var(--ink); border-radius:999px; padding:8px 14px; cursor:pointer;
+  }
+  .settings input { accent-color:var(--purple); transform:scale(1.2); margin-right:6px; }
+
+  @media (max-width:600px) {
+    .brand { font-size:1.4rem; } #eq { font-size:1.8rem; }
+    button { font-size:1.1rem; padding:10px 18px; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <div id="eq">Loading…</div>
-  <label><input type="checkbox" id="usePinch" checked> Pinch to draw</label>
-  <select id="tolerance">
-    <option value="1.5">Forgiving</option>
-    <option value="0.75">Normal</option>
-    <option value="0.4">Challenge</option>
-  </select>
-  <label><input type="checkbox" id="snap" checked> Snap to clean shape</label>
-  <label><input type="checkbox" id="contrast"> High contrast</label>
-  <button id="clear">Clear</button>
-  <button id="check">Check ✓</button>
-  <button id="next">Next →</button>
+<header class="top">
+  <div class="brand"><span>✏️</span> <span>Function</span> Tracer</div>
+  <div id="dots" aria-label="Level progress"></div>
 </header>
-<div id="stage">
-  <video id="cam" autoplay playsinline muted></video>
-  <canvas id="board" width="800" height="600"></canvas>
-</div>
-<div id="result"></div>
-<div id="status">Pinch thumb + index finger (or hold SPACE) to draw. Press ENTER to check.</div>
+<main>
+  <section class="eq-card">
+    <span class="eq-label">Trace this!</span>
+    <div id="eq">Loading…</div>
+  </section>
+  <div class="actions">
+    <button id="clear">🧽 Clear</button>
+    <button id="check">✅ Check</button>
+    <button id="next">Next ➜</button>
+  </div>
+  <div id="stage">
+    <video id="cam" autoplay playsinline muted></video>
+    <canvas id="board" width="800" height="600"></canvas>
+  </div>
+  <div id="result" aria-live="polite"></div>
+  <div id="status">👌 Pinch thumb + pointer finger (or hold SPACE) to draw. Press ENTER to check.</div>
+  <div class="settings">
+    <label><input type="checkbox" id="usePinch" checked>Pinch to draw</label>
+    <select id="tolerance" aria-label="Difficulty">
+      <option value="1.5">🐢 Forgiving</option>
+      <option value="0.75">🐇 Normal</option>
+      <option value="0.4">🚀 Challenge</option>
+    </select>
+    <label><input type="checkbox" id="snap" checked>Snap to clean shape</label>
+    <label><input type="checkbox" id="contrast">High contrast</label>
+  </div>
+</main>
 
 <script type="module">
 import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
@@ -177,7 +260,14 @@ async function showResult(r) {
   const id = ++feedbackId;
   const m = r.pieces.find(p => p.mistake)?.mistake;
   const fallback = m ? MESSAGES[m] : "Amazing — that's the graph!";
-  const show = text => { if (id === feedbackId) $("result").textContent = `Score: ${r.overall} ⭐  ${text}`; };
+  const stars = r.overall >= 85 ? "⭐⭐⭐" : r.overall >= 60 ? "⭐⭐" : r.overall >= 30 ? "⭐" : "💪";
+  const show = text => {
+    if (id !== feedbackId) return;
+    const badge = document.createElement("div"); badge.className = "score";
+    badge.innerHTML = `${r.overall}<small>${stars}</small>`;
+    const msg = document.createElement("div"); msg.textContent = text;
+    $("result").replaceChildren(badge, msg);
+  };
   if (m === "missing_piece") return show(fallback);       // nothing drawn: no need to ask Claude
   show("Thinking…");
   try {
@@ -217,7 +307,7 @@ function drawGrid() {
 // Each label gets an outline in the background color so it stays readable over grid lines.
 function drawAxisNumbers(ox, oy) {
   const fmt = v => (v < 0 ? "−" + -v : String(v));          // real minus sign reads better than "-"
-  ctx.font = "bold 18px system-ui, sans-serif";
+  ctx.font = "bold 18px Nunito, system-ui, sans-serif";
   ctx.lineWidth = 5; ctx.lineJoin = "round";
   ctx.strokeStyle = css("--bg"); ctx.fillStyle = css("--ink");
   const label = (text, x, y, align, baseline) => {
@@ -235,7 +325,7 @@ function drawAxisNumbers(ox, oy) {
     label(fmt(v), ox - 8, py, "right", "middle");           // left of the y-axis
   }
   label("0", ox - 8, oy + 6, "right", "top");
-  ctx.font = "italic bold 22px system-ui, sans-serif";
+  ctx.font = "italic bold 22px Fredoka, system-ui, sans-serif";
   label("x", W - 10, oy - 8, "right", "bottom");
   label("y", ox + 10, 8, "left", "top");
 }
@@ -326,6 +416,11 @@ function loadLevel(i) {
   levelIdx = (i + LEVELS.length) % LEVELS.length;
   trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1;
   $("eq").textContent = LEVELS[levelIdx].label; $("result").textContent = "";
+  $("dots").replaceChildren(...LEVELS.map((_, j) => {
+    const d = document.createElement("i");
+    d.className = j < levelIdx ? "done" : j === levelIdx ? "now" : "";
+    return d;
+  }));
 }
 function check() {
   if (revealed) return;                                 // avoid repeat checks / repeat Claude calls
