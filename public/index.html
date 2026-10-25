@@ -505,10 +505,10 @@ function drawCursor(drawing) {
   }
 }
 function drawTakeover() {                                     // ring fills while a new hand waits to take control
-  if (!aloneSince || !newHand) return;
-  const c = canvasPointFor(newHand[4]);
+  if (!challenger?.lm) return;
+  const c = canvasPointFor(challenger.lm[4]);
   if (!c) return;                                             // only drawn when that hand is over the graph
-  const t = Math.min(1, (performance.now() - aloneSince) / TAKEOVER_MS);
+  const t = Math.min(1, (performance.now() - challenger.since) / challenger.wait);
   ctx.beginPath(); ctx.arc(c.x, c.y, 22, 0, Math.PI * 2);
   ctx.lineWidth = 3; ctx.strokeStyle = css("--axis"); ctx.setLineDash([4, 6]); ctx.stroke(); ctx.setLineDash([]);
   ctx.beginPath(); ctx.arc(c.x, c.y, 22, -Math.PI / 2, -Math.PI / 2 + t * 2 * Math.PI);
@@ -523,8 +523,9 @@ function render(drawing = false) {
 // pointer finger comes down to pinch, so lines are steadier):
 //   pinch & hold on the graph = draw · quick pinch on a button = click ·
 //   fist for 1 second = clear
-// The first hand seen is the main hand. Another hand is ignored for drawing; it only takes over
-// after being alone on screen for 2 seconds (a ring fills while it waits).
+// The closest hand to the camera becomes the main hand; background people are ignored. Another hand
+// takes over after 2 s once the main hand is gone, or after 1 s if it is clearly closer (a ring fills
+// while it waits). If the main hand is gone for 1.5 s, the game forgets it and picks the closest hand.
 //
 // Tuning knobs (test these on a real webcam and adjust):
 const HAND = {
@@ -548,34 +549,79 @@ const curled = (lm, tip, knuckle) => dist(lm[tip], lm[0]) < HAND.fistCurl * dist
 const isFist = lm => [[8, 5], [12, 9], [16, 13], [20, 17]].every(([tip, knuckle]) => curled(lm, tip, knuckle));
 const pinchRatio = lm => dist(lm[4], lm[8]) / dist(lm[0], lm[9]);   // thumb–index gap relative to hand size
 
-// ----- Main hand: who controls the pen (from the teammate's version) -----
+// ----- Main hand: who controls the pen -----
 // MediaPipe doesn't say which hand is which from frame to frame, so we follow the main hand
-// by where it was last seen and whether it is a left or right hand.
-const TAKEOVER_MS = 2000;  // a new hand must be alone this long to take control
-const LOST_MS = 1000;      // the main hand can vanish this long (tracking blink) and still be recognized
-const MATCH_DIST = 0.35;   // how far (fraction of the screen) the main hand can move between sightings
-let main = null;           // { pos, side, seen } of the hand in control; null until a hand first appears
-let aloneSince = 0;        // when a lone non-main hand appeared (0 = no takeover in progress)
-let newHand = null;        // that lone hand's landmarks, to draw the takeover ring
+// by where it was last seen, its size, and whether it is a left or right hand.
+// "The person in front wins": a hand's size on camera tells us how close it is. Hands that are
+// much smaller than the closest hand (people in the background) are ignored completely.
+const HANDS = {
+  takeoverMs: 2000,   // a new hand must wait this long to take control while the main hand is gone…
+  closerMs: 1000,     // …or this long if it is clearly closer to the camera than the main hand
+  lostMs: 1000,       // the main hand can vanish this long (tracking blink) and still be recognized
+  forgetMs: 1500,     // after this long without the main hand, forget it and pick the closest hand fresh
+  rememberMs: 6000,   // for this long after the main hand leaves, much smaller hands still count as background
+  matchDist: 0.35,    // how far (fraction of the screen) the main hand can move between sightings
+  sameSize: 1.6,      // a hand more than 1.6× bigger/smaller than the main hand is not the same hand
+  closer: 1.35,       // a hand 1.35× bigger than the main hand counts as "clearly closer"
+  background: 0.6,    // hands smaller than 60% of the closest hand are background people: ignored
+  minSize: 30,        // hands smaller than this (camera pixels) are too far away to use at all
+};
+// Hand size in camera pixels: wrist → middle knuckle, or knuckle width, whichever is bigger
+// (so it stays steady when the hand turns sideways or tilts). Bigger = closer to the camera.
+const px = p => ({ x: p.x * 640, y: p.y * 480 });            // camera coords → camera pixels (true proportions)
+const handSize = lm => Math.max(dist(px(lm[0]), px(lm[9])), dist(px(lm[5]), px(lm[17])));
+let main = null;           // { pos, side, size, seen } of the hand in control; null = pick the closest hand
+let challenger = null;     // { pos, since, lm } a hand waiting to take control (drives the takeover ring)
 
-function pickMainHand(hands, now) {          // hands: [{ lm, side }] → the main hand, or null
-  const take = h => { main = { pos: h.lm[9], side: h.side, seen: now }; aloneSince = 0; newHand = null; return h; };
-  if (!hands.length) { aloneSince = 0; newHand = null; return null; }
-  if (!main) return take(hands[0]);                           // very first hand: no waiting
-  let best = null, bestCost = Infinity;
-  if (now - main.seen <= LOST_MS) {
-    for (const h of hands) {                                  // closest hand, preferring the same side
+let lastMain = null;       // { size, seen } of the most recent main hand, so a background hand can't
+                           // grab the pen just because you lowered your hand for a moment
+
+// Keep only hands of the person in front, closest first.
+function frontHands(hands, now) {
+  const sized = hands.map(h => ({ ...h, size: handSize(h.lm) })).filter(h => h.size >= HANDS.minSize);
+  const remembered = lastMain && now - lastMain.seen < HANDS.rememberMs ? lastMain.size : 0;
+  const biggest = Math.max(remembered, ...sized.map(h => h.size));
+  return sized.filter(h => h.size >= biggest * HANDS.background).sort((a, b) => b.size - a.size);
+}
+
+function pickMainHand(hands, now) {          // hands: front hands, closest first → the main hand, or null
+  const follow = h => {
+    main = { pos: h.lm[9], side: h.side, size: h.size, seen: now };
+    lastMain = { size: h.size, seen: now };
+    return h;
+  };
+  const take = h => {                                         // a different hand takes control: drop the old pen state
+    cursor = null; pointer = null; pinching = false; pinchStart = null; fistSince = 0; challenger = null;
+    return follow(h);
+  };
+  if (main && now - main.seen > HANDS.forgetMs) main = null;  // main hand gone a while: recalibrate
+  if (!hands.length) { challenger = null; return null; }
+  if (!main) return take(hands[0]);                           // nobody in control: the closest hand, no waiting
+
+  let matched = null, bestCost = Infinity;                    // find the main hand again
+  if (now - main.seen <= HANDS.lostMs) {
+    for (const h of hands) {
+      const ratio = Math.max(h.size, main.size) / Math.min(h.size, main.size);
+      if (ratio > HANDS.sameSize) continue;                   // too different in size to be the same hand
       const cost = dist(h.lm[9], main.pos) + (h.side !== main.side ? 0.3 : 0);
-      if (cost < bestCost) { best = h; bestCost = cost; }
+      if (cost < bestCost) { matched = h; bestCost = cost; }
     }
+    if (bestCost >= HANDS.matchDist) matched = null;
   }
-  if (best && bestCost < MATCH_DIST) return take(best);
-  if (hands.length === 1) {                                   // a different hand, alone on screen
-    if (!aloneSince) { aloneSince = now; toast("✋ New hand: hold still to take over"); }
-    newHand = hands[0].lm;
-    if (now - aloneSince >= TAKEOVER_MS) { cursor = null; pinching = false; fistSince = 0; return take(hands[0]); }
-  } else { aloneSince = 0; newHand = null; }                  // main hand gone and 2+ others: nobody draws
-  return null;
+
+  // Who could take over? While the main hand is visible, only a clearly closer hand.
+  // While it's gone, the closest other hand (even if other hands are on screen too).
+  const others = hands.filter(h => h !== matched);
+  const rival = matched ? others.find(h => h.size >= matched.size * HANDS.closer) : others[0];
+  if (!rival) { challenger = null; return matched ? follow(matched) : null; }
+  if (!challenger || dist(rival.lm[9], challenger.pos) > HANDS.matchDist) {
+    challenger = { since: now };                              // a new hand started waiting
+    toast(matched ? "✋ Closer hand: hold still to take over" : "✋ New hand: hold still to take over");
+  }
+  challenger.pos = rival.lm[9]; challenger.lm = rival.lm;
+  challenger.wait = matched ? HANDS.closerMs : HANDS.takeoverMs;
+  if (now - challenger.since >= challenger.wait) return take(rival);
+  return matched ? follow(matched) : null;                    // the main hand keeps the pen until the rival wins
 }
 
 let landmarker, lastVideoTime = -1;
@@ -691,14 +737,18 @@ async function start() {
       modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
       delegate: "GPU",
     },
-    runningMode: "VIDEO", numHands: 2,
+    // Look for up to 4 hands so a background person can't use up the slots meant for yours;
+    // the stricter confidences cut "ghost" hands (e.g. a hand resting in someone's lap).
+    runningMode: "VIDEO", numHands: 4,
+    minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.5,
   });
   newEquation();
   loop();
 }
 
 // One frame of hand input (also used by tests). hands = [{ lm, side }]
-function step(hands, now) {
+function step(allHands, now) {
+  const hands = frontHands(allHands, now);                    // drop people in the background, closest first
   const mainHand = pickMainHand(hands, now);
   if (mainHand) oneHand(mainHand.lm, now);                    // only the main hand points, draws, and clicks
   else noHands();

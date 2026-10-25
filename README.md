@@ -15,7 +15,7 @@ Hand controls:
 
 Zoom with the − / + buttons in the corner of the graph, or the + and − keys.
 
-If two hands are on screen, the first hand that appeared stays in control of the pen. Another hand can only take over after it has been alone on screen for 2 seconds (a ring fills up while it waits).
+If several people are on camera, the person closest to the camera gets the pen; hands of people in the background are ignored. Once a hand has the pen it keeps it. Another hand can take over after 2 seconds if the main hand has left, or after 1 second if it is clearly closer to the camera (a ring fills up while it waits). If the main hand is gone for 1.5 seconds, the game resets and gives the pen to the closest hand right away. For a few seconds after you lower your hand, much smaller hands (people behind you) still can't grab it.
 
 
 ## How Claude is used
