@@ -27,10 +27,22 @@
       linear-gradient(180deg, var(--sky1), var(--sky2));
     background-attachment:fixed;
   }
-  main { max-width:860px; margin:0 auto; padding:0 16px 32px; }
-
-  .top { display:flex; align-items:center; justify-content:space-between; gap:12px; max-width:860px; margin:0 auto; padding:16px; }
-  .brand { font-family:"Fredoka", sans-serif; font-weight:700; font-size:1.8rem; letter-spacing:.5px; }
+  /* One screen, no scrolling: a top bar (title · buttons · progress), then the graph as big as fits,
+     with a side panel (equation, feedback, settings, tips) in the spare space beside it. */
+  :root { --head:92px; --panel:330px; --gap:20px; }
+  .top {
+    height:var(--head); display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:16px; padding:0 24px;
+  }
+  .brand { font-family:"Fredoka", sans-serif; font-weight:700; font-size:1.8rem; letter-spacing:.5px; white-space:nowrap; }
+  #dots { justify-self:end; }
+  main.app {
+    display:flex; justify-content:center; align-items:flex-start; gap:var(--gap);
+    height:calc(100dvh - var(--head)); padding:0 var(--gap) var(--gap);
+  }
+  .panel {
+    width:var(--panel); flex:none; max-height:100%; overflow-y:auto; display:flex; flex-direction:column; gap:14px;
+    padding:4px 4px 12px;   /* room for the cards' shadows */
+  }
   .brand span:nth-child(1){color:var(--red)} .brand span:nth-child(2){color:var(--blue)}
   #dots { display:flex; gap:8px; }
   #dots i { width:16px; height:16px; border-radius:50%; background:var(--card); border:3px solid var(--ink); opacity:.35; }
@@ -38,14 +50,14 @@
   #dots i.now { background:var(--yellow); opacity:1; transform:scale(1.25); }
 
   .eq-card {
-    display:flex; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap;
-    background:var(--card); border:4px solid var(--ink); border-radius:24px; padding:12px 20px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;
+    background:var(--card); border:4px solid var(--ink); border-radius:24px; padding:12px 16px;
     box-shadow:0 6px 0 var(--ink);
   }
-  .eq-label { font-family:"Fredoka", sans-serif; font-size:1.2rem; background:var(--yellow); color:#1f2a44; padding:4px 14px; border-radius:999px; }
-  #eq { font-family:"Fredoka", sans-serif; font-size:2.4rem; font-weight:700; color:var(--purple); }
+  .eq-label { font-family:"Fredoka", sans-serif; font-size:1.1rem; background:var(--yellow); color:#1f2a44; padding:4px 14px; border-radius:999px; }
+  #eq { font-family:"Fredoka", sans-serif; font-size:2.3rem; font-weight:700; color:var(--purple); text-align:center; }
 
-  .actions { display:flex; justify-content:center; gap:14px; flex-wrap:wrap; margin:18px 0; }
+  .actions { display:flex; justify-content:center; gap:14px; }
   button {
     font-family:"Fredoka", sans-serif; font-size:1.3rem; font-weight:600; padding:12px 26px;
     border-radius:18px; border:4px solid var(--ink); color:#1f2a44; cursor:pointer;
@@ -53,11 +65,14 @@
   }
   button:hover { transform:translateY(-2px); box-shadow:0 7px 0 var(--ink); }
   button:active { transform:translateY(4px); box-shadow:0 1px 0 var(--ink); }
+  button:disabled { opacity:.4; cursor:default; transform:none; box-shadow:0 5px 0 var(--ink); }
+  #prev { background:var(--purple); color:#fff; }
   #clear { background:var(--yellow); } #check { background:var(--green); } #next { background:var(--blue); color:#fff; }
   body.contrast button { color:#000; }
 
-  #stage {
-    position:relative; width:100%; aspect-ratio:4/3; margin:0 auto; overflow:hidden;
+  #stage {   /* as big as fits: the full height below the top bar, or the width beside the panel */
+    height:min(calc(100dvh - var(--head) - var(--gap) - 8px), calc((100vw - var(--panel) - 3 * var(--gap)) * 0.75));
+    min-height:300px; aspect-ratio:4/3; flex:none; position:relative; overflow:hidden;
     border:5px solid var(--ink); border-radius:28px; background:var(--bg); box-shadow:0 8px 0 var(--ink);
   }
   #cam, #board { position:absolute; inset:0; width:100%; height:100%; }
@@ -83,78 +98,106 @@
   #handPointer.pinch { background:var(--cursor); }
   .hand-hover { outline:5px solid var(--cursor); outline-offset:3px; }
   #toast {
-    position:fixed; left:50%; top:20px; transform:translateX(-50%); z-index:1001; display:none;
+    position:fixed; left:50%; bottom:28px; transform:translateX(-50%); z-index:1001; display:none;   /* bottom: never covers the score */
     font-family:"Fredoka", sans-serif; font-size:1.4rem; font-weight:600; padding:10px 22px;
     background:var(--card); color:var(--ink); border:4px solid var(--ink); border-radius:999px; box-shadow:0 5px 0 var(--ink);
   }
   #status b { white-space:nowrap; }
 
+  /* Score card. Pops up over the top of the graph after Check (button, Enter or ✌️), then after ~4 s
+     moves into the side panel under the equation, out of the way. Clear / Next / Previous remove it. */
   #result {
-    position:relative; display:flex; align-items:center; gap:14px; margin:26px 0 8px; padding:14px 20px;
-    background:var(--card); border:4px solid var(--ink); border-radius:22px; font-size:1.3rem; font-weight:800;
+    position:relative; display:flex; align-items:center; gap:12px; padding:12px 48px 12px 14px;
+    background:var(--card); border:4px solid var(--ink); border-radius:22px; box-shadow:0 6px 0 var(--ink);
+    font-size:1.05rem; font-weight:800; animation:slideIn .4s ease-out;
+  }
+  #result.popup {
+    position:absolute; z-index:3; top:14px; left:50%; transform:translateX(-50%); width:min(88%, 640px);
+    gap:14px; padding:14px 52px 14px 18px; box-shadow:0 8px 0 var(--ink); font-size:1.2rem;
+    animation:pop .35s cubic-bezier(.2,1.6,.4,1);
+  }
+  @keyframes pop { from { transform:translateX(-50%) scale(.6); opacity:0; } to { transform:translateX(-50%) scale(1); opacity:1; } }
+  @keyframes slideIn { from { transform:translateX(-40px); opacity:0; } to { transform:none; opacity:1; } }
+  #result .close {
+    position:absolute; top:8px; right:8px; width:36px; height:36px; padding:0; border-radius:50%;
+    font-size:1.1rem; border-width:3px; box-shadow:0 3px 0 var(--ink); background:var(--card); color:var(--ink);
   }
   #result:empty { display:none; }
-  #result::before { content:"🦉"; font-size:2.6rem; }
-  #result .score { flex:none; font-family:"Fredoka", sans-serif; background:var(--yellow); color:#1f2a44; border-radius:16px; padding:6px 12px; text-align:center; line-height:1.1; }
-  #result .score small { display:block; font-size:.95rem; }
+  #result::before { content:"🦉"; font-size:2rem; }
+  #result.popup::before { font-size:2.6rem; }
+  #result .score { flex:none; font-family:"Fredoka", sans-serif; font-size:1.6rem; background:var(--yellow); color:#1f2a44; border-radius:16px; padding:6px 12px; text-align:center; line-height:1.1; }
+  #result.popup .score { font-size:2rem; padding:6px 14px; }
+  #result .score small { display:block; font-size:1rem; }
 
   #status {
-    text-align:center; margin:18px auto 0; max-width:620px; padding:10px 16px; font-size:1.05rem;
+    text-align:left; padding:10px 14px; font-size:.95rem; line-height:1.45;
     background:#fff7b0; color:#1f2a44; border-radius:6px; transform:rotate(-1deg); box-shadow:0 4px 10px var(--shadow);
   }
   body.contrast { background:#000; }
   body.contrast #status { background:#222; color:#fff; }
 
-  .settings { display:flex; flex-wrap:wrap; justify-content:center; gap:10px; margin-top:22px; }
+  .settings { display:grid; grid-template-columns:1fr; gap:8px; }
+  .settings > * { width:100%; min-width:0; }
+  .settings label { display:flex; align-items:center; }
   .settings label, .settings select {
     font-size:1rem; font-weight:800; background:var(--card); color:var(--ink);
     border:3px solid var(--ink); border-radius:999px; padding:8px 14px; cursor:pointer;
   }
   .settings input { accent-color:var(--purple); transform:scale(1.2); margin-right:6px; }
 
+  /* Narrower windows: smaller title and buttons; then the panel moves under the graph. */
+  @media (max-width:1200px) {
+    .brand { font-size:1.4rem; }
+    .actions { gap:10px; } .actions button { font-size:1.15rem; padding:10px 18px; }
+  }
+  @media (max-width:960px) {
+    :root { --head:auto; }
+    .top { grid-template-columns:1fr auto; grid-template-areas:"brand dots" "buttons buttons"; padding:12px 16px; gap:10px; }
+    .brand { grid-area:brand; } #dots { grid-area:dots; } .actions { grid-area:buttons; flex-wrap:wrap; }
+    main.app { flex-direction:column; align-items:center; height:auto; }
+    #stage { width:100%; height:auto; min-height:0; }
+    .panel { width:100%; max-width:640px; max-height:none; overflow:visible; }
+  }
   @media (max-width:600px) {
-    .brand { font-size:1.4rem; } #eq { font-size:1.8rem; }
-    button { font-size:1.1rem; padding:10px 18px; }
+    #eq { font-size:1.8rem; }
+    .actions button { font-size:1rem; padding:8px 12px; }
   }
 </style>
 </head>
 <body>
 <header class="top">
   <div class="brand"><span>✏️</span> <span>Function</span> Tracer</div>
-  <div id="dots" aria-label="Level progress"></div>
-</header>
-<main>
-  <section class="eq-card">
-    <span class="eq-label">Trace this!</span>
-    <div id="eq">Loading…</div>
-  </section>
-  <div class="actions">
+  <nav class="actions" aria-label="Game controls">
+    <button id="prev" disabled>⬅ Previous</button>
     <button id="clear">🧽 Clear</button>
     <button id="check">✅ Check</button>
     <button id="next">Next ➜</button>
-  </div>
+  </nav>
+  <div id="dots" aria-label="Level progress"></div>
+</header>
+<main class="app">
   <div id="stage">
     <video id="cam" autoplay playsinline muted></video>
     <canvas id="board" width="800" height="600"></canvas>
+    <div id="result" aria-live="polite"></div>
     <div class="zoom">
       <button id="zoomOut" aria-label="Zoom out">−</button>
       <span id="zoomLabel">Normal</span>
       <button id="zoomIn" aria-label="Zoom in">+</button>
     </div>
   </div>
-  <div id="result" aria-live="polite"></div>
-  <div id="status">
-    <b>👍 Your thumb is the pen:</b> tap your pointer finger onto it and hold on the graph to draw ·
-    <b>👌 Quick pinch</b> on a button to click ·
-    <b>✊ Fist</b> for 1 second to clear
-  </div>
+  <aside class="panel">
+  <section class="eq-card">
+    <span class="eq-label">Trace this!</span>
+    <div id="eq">Loading…</div>
+  </section>
+  <div id="resultDock"></div>
   <div class="settings">
     <select id="kind" aria-label="Kind of equations">
       <option value="mix">📈 Lines + curves</option>
       <option value="line">📏 Lines only</option>
       <option value="curve">🌈 Curves only</option>
     </select>
-    <label><input type="checkbox" id="usePinch" checked>Pinch to draw</label>
     <select id="tolerance" aria-label="Difficulty">
       <option value="1.5">🐢 Forgiving</option>
       <option value="0.75">🐇 Normal</option>
@@ -169,6 +212,13 @@
     <label><input type="checkbox" id="snap" checked>Snap to clean shape</label>
     <label><input type="checkbox" id="contrast">High contrast</label>
   </div>
+  <div id="status">
+    <b>👍 Your thumb is the pen:</b> touch your pointer finger to it on the graph to draw, keep them close to keep drawing, open them to stop ·
+    <b>👌 Quick pinch</b> on a button to click ·
+    <b>✌️ Peace sign</b> to check ·
+    <b>✊ Fist</b> (thumb tucked in) for 1 second to clear
+  </div>
+  </aside>
 </main>
 <div id="handPointer"></div>
 <div id="toast" role="status"></div>
@@ -241,6 +291,9 @@ let pinching = false, spaceHeld = false, revealed = false;
 let wasDrawing = false;    // was the pen down on the previous frame?
 let strokeStart = -1;      // index in `trace` where the current stroke began
 let fistSince = 0, fistUsed = false;   // for "hold a fist to clear"
+let peaceSince = 0, peaceSeenAt = 0, peaceUsed = false;   // for "hold a peace sign to check"
+let clearLocked = false;   // after a peace-sign check, a fist can't clear until the hand has opened (or pinched)
+let lockToldAt = 0;        // when we last said "open your hand first"
 let pinchEndedAt = -Infinity;          // when the last pinch was released
 let feedbackId = 0;
 const ROUND = 5;           // progress dots: equations checked in this round of 5
@@ -279,6 +332,17 @@ const SHAPE = {
   hookLen: 0.45,      // a corner piece shorter than this (graph units) at the start/end is a hook: dropped
   cornerVsCurve: 1.7, // a corner must also fit 1.7× better than any curve (else a smooth bend = a curve)
 };
+// Lean toward the kind of graph being traced (only its TYPE — line or parabola — never the answer
+// itself). On a parabola, a bend counts as a curve much more easily and a V-ish U becomes a U; on a line,
+// a slight bow stays straight more easily. A clearly wrong shape still stays wrong.
+const LEAN = {
+  curve: { lineFit: 0.03, curveBetter: 0.8, curveFit: 0.09, bend: 0.03, bendIfLopsided: 0.02, bendIfNotLine: 0.025,
+           bendFloor: 0.22, cornerBetter: 0.45, cornerVsCurve: 3, assistCurve: 0.12, assistLine: 0.05, noCorner: true },
+  line:  { bend: 0.09, bendIfLopsided: 0.06, bendIfNotLine: 0.06, curveBetter: 0.5, bendFloor: 0.25,
+           assistLine: 0.09, assistCurve: 0.06 },
+};
+const shapeRulesFor = kind => ({ ...SHAPE, ...(LEAN[kind] || {}) });
+let SH = SHAPE;            // the rules in use for the stroke being recognised
 const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
 const rms = a => Math.sqrt(mean(a.map(v => v * v)));
 
@@ -372,19 +436,22 @@ function lopsided(pts) {
 // What is this stroke? → { kind, clean: points of the clean shape, toward: p → nearest point on it }
 function recognise(pts, depth = 0) {
   const one = recogniseOne(pts), corner = fitCorner(pts);
-  if (!corner || corner.turn < SHAPE.cornerAngle || corner.err > one.err * SHAPE.cornerBetter) return one;
-  if (one.curve && one.curve.bulge > SHAPE.bendFloor && one.curve.err < corner.err * SHAPE.cornerVsCurve)
+  if (!corner || corner.turn < SH.cornerAngle || corner.err > one.err * SH.cornerBetter) return one;
+  if (one.curve && one.curve.bulge > SH.bendFloor && one.curve.err < corner.err * SH.cornerVsCurve)
     return curveShape(pts, one.curve);                         // a smooth bend, not a sharp corner
   // A tiny piece at the start or end: a hook from pinching / letting go. Drop it, look at the rest.
   const shortSide = Math.min(corner.lenA, corner.lenB);
-  if (shortSide < SHAPE.hookLen) {
+  if (shortSide < SH.hookLen) {
     if (depth >= 2) return one;
     return recognise(corner.lenA < corner.lenB ? pts.slice(corner.k) : pts.slice(0, corner.k + 1), depth + 1);
   }
+  // On a parabola level a stroke is never turned into two straight lines meeting at a corner: whatever
+  // bend there is, it's treated as a curve if one fits, otherwise the stroke is kept as recognised.
+  if (SH.noCorner) return one.curve && one.curve.bulge > SH.bendFloor ? curveShape(pts, one.curve) : one;
   // Two straight lines meeting at a corner — but only if each side really is straight.
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
   const size = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
-  if (corner.err > Math.max(SHAPE.lineFit * size, SHAPE.lineFloor)) return one;
+  if (corner.err > Math.max(SH.lineFit * size, SH.lineFloor)) return one;
   const { k, la, lb } = corner;
   let c = la.project(pts[k]);                                  // the corner: where the two lines cross
   const ax = la.at(1), bx = lb.at(1), a0 = la.at(0), b0 = lb.at(0);
@@ -418,16 +485,16 @@ function recogniseOne(pts) {
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
   const size = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
   const line = fitLine(pts), curve = fitCurve(pts);
-  const lineOk = line.err < Math.max(SHAPE.lineFit * size, SHAPE.lineFloor);
-  const curveFits = curve && curve.err < SHAPE.curveFit * size && curve.err < line.err * SHAPE.curveBetter;
-  const need = !lineOk ? SHAPE.bendIfNotLine : lopsided(pts) > SHAPE.lopsided ? SHAPE.bendIfLopsided : SHAPE.bend;
-  const bends = curve && curve.bulge > Math.max(SHAPE.bendFloor, need * size);
+  const lineOk = line.err < Math.max(SH.lineFit * size, SH.lineFloor);
+  const curveFits = curve && curve.err < SH.curveFit * size && curve.err < line.err * SH.curveBetter;
+  const need = !lineOk ? SH.bendIfNotLine : lopsided(pts) > SH.lopsided ? SH.bendIfLopsided : SH.bend;
+  const bends = curve && curve.bulge > Math.max(SH.bendFloor, need * size);
   if (curveFits && bends) return curveShape(pts, curve);      // a real bend, not a slightly bowed line
   if (lineOk) return { ...lineShape(pts, line), curve };
   // Not a clean match — but if it's still reasonably close to a line or a curve, assist toward that.
-  const curveClose = curve && curve.err < SHAPE.assistCurve * size && curve.bulge > SHAPE.bendFloor;
-  const lineClose = line.err < SHAPE.assistLine * size;
-  if (curveClose && (!lineClose || curve.err < line.err * SHAPE.curveBetter)) return curveShape(pts, curve);
+  const curveClose = curve && curve.err < SH.assistCurve * size && curve.bulge > SH.bendFloor;
+  const lineClose = line.err < SH.assistLine * size;
+  if (curveClose && (!lineClose || curve.err < line.err * SH.curveBetter)) return curveShape(pts, curve);
   if (lineClose) return lineShape(pts, line);
   return { kind: "free", clean: pts, toward: p => p, err: Math.min(line.err, curve?.err ?? Infinity), curve };
 }
@@ -438,34 +505,45 @@ function recogniseOne(pts) {
 // a lot, or for strokes joined to an older, already cleaned-up one.)
 function handShape(raw) {
   if (raw.some(p => p.hx === undefined || p.hx === null)) return raw;
-  let penLen = 0; for (let i = 1; i < raw.length; i++) penLen += Math.hypot(raw[i].x - raw[i - 1].x, raw[i].y - raw[i - 1].y);
-  if (raw.at(-1).pushed - raw[0].pushed > 0.15 * penLen) return raw;
   const mx = mean(raw.map(p => p.x)), my = mean(raw.map(p => p.y)), hx = mean(raw.map(p => p.hx)), hy = mean(raw.map(p => p.hy));
-  let num = 0, den = 0;
-  for (const p of raw) { const ax = p.hx - hx, ay = p.hy - hy; num += ax * (p.x - mx) + ay * (p.y - my); den += ax * ax + ay * ay; }
-  const k = den > 0 ? num / den : 0;                          // best scale from hand path to drawing
-  if (!(k > 0.05 && k < 3)) return raw;
-  return raw.map(p => ({ x: mx + k * (p.hx - hx), y: my + k * (p.hy - hy) }));
+  let cxx = 0, vxx = 0, cyy = 0, vyy = 0;
+  for (const p of raw) { const ax = p.hx - hx, ay = p.hy - hy; cxx += ax * (p.x - mx); vxx += ax * ax; cyy += ay * (p.y - my); vyy += ay * ay; }
+  // Stretch left-right and up-down separately (that keeps a parabola a parabola and a line a line), so the
+  // hand's shape lands on the drawing even where the pen was slowed down or pushed at the camera edge.
+  // If the stroke barely moves along one direction, use the other direction's stretch for both.
+  const shared = (cxx + cyy) / Math.max(1e-9, vxx + vyy);
+  let sx = vxx > 0 ? cxx / vxx : shared, sy = vyy > 0 ? cyy / vyy : shared;
+  if (vxx < 0.04 * vyy) sx = sy; if (vyy < 0.04 * vxx) sy = sx;
+  const ok = v => v > 0.05 && v < 4;
+  if (!ok(sx) || !ok(sy)) { if (!ok(shared)) return raw; sx = sy = shared; }
+  if (sx / sy > 3) sx = 3 * sy; if (sy / sx > 3) sy = 3 * sx;
+  return raw.map(p => ({ x: mx + sx * (p.hx - hx), y: my + sy * (p.hy - hy) }));
 }
 // Clean up trace[start…] (the stroke that just finished) in place.
 function snapStroke(start) {
   if (start < 0) return;
   let end = start;
   while (end + 1 < trace.length && trace[end + 1].drawing) end++;
-  const raw = trace.slice(start, end + 1);
+  let raw = trace.slice(start, end + 1);
+  if (joined && joined.start === start) {                     // carried on from an already cleaned-up stroke:
+    raw = [...joined.raw, ...trace.slice(joined.cleanEnd + 1, end + 1)];   // use its ORIGINAL points, not the cleaned ones
+  }
+  joined = null;
   if (raw.length < 3) return;
   let pts = resample(handShape(raw), SHAPE.spacing);
   pts = blur(pts, SHAPE.blur / SHAPE.spacing);
   let out = pts, kind = "free";
   if (pts.length >= 8) {
+    SH = shapeRulesFor(level?.snap);                          // lean toward this graph's type
     const shape = recognise(pts); kind = shape.kind;
     out = $("snap").checked ? shape.clean
       : pts.map(p => { const q = shape.toward(p); return { x: p.x + SHAPE.pullOff * (q.x - p.x), y: p.y + SHAPE.pullOff * (q.y - p.y) }; });
   }
   trace.splice(start, end - start + 1, ...out.map(p => ({ x: p.x, y: p.y, drawing: true })));
   lastShape = kind;
-  lastStroke = { start, end: start + out.length - 1, at: performance.now() };
+  lastStroke = { start, end: start + out.length - 1, at: performance.now(), raw };
 }
+let joined = null;         // { start, cleanEnd, raw } while a new stroke carries on from a cleaned-up one
 let lastShape = null;      // what the last stroke was recognised as (handy when tuning)
 let lastStroke = null;     // { start, end, at } of the last cleaned-up stroke, so a new stroke can join it
 
@@ -478,6 +556,7 @@ function joinStroke(penAt) {
   const tail = trace[s.end];
   if (Math.hypot(tail.x - penAt.x, tail.y - penAt.y) > JOIN.dist) return -1;
   trace.splice(s.end + 1, trace.length - 1 - (s.end + 1));   // drop the hover points between the two strokes
+  joined = { start: s.start, cleanEnd: s.end, raw: s.raw };
   return s.start;
 }
 
@@ -631,8 +710,23 @@ const MESSAGES = {
   off_screen: "The graph is off the screen. Try zooming out with the − button.",
 };
 const pct = v => `${Math.round(v * 100)}%`;
+// The score card pops up over the graph, then after RESULT_DOCK_MS moves into the side panel.
+const RESULT_DOCK_MS = 4000;
+let dockTimer = 0;
+function popUpResult() {
+  clearTimeout(dockTimer);
+  const el = $("result"); $("stage").append(el); el.classList.add("popup");
+  dockTimer = setTimeout(dockResult, RESULT_DOCK_MS);
+}
+function dockResult() {
+  clearTimeout(dockTimer);
+  const el = $("result"); if (!el.classList.contains("popup")) return;
+  el.classList.remove("popup"); $("resultDock").append(el);
+}
+function hideResult() { clearTimeout(dockTimer); $("result").replaceChildren(); dockResult(); }
 async function showResult(r) {
   const id = ++feedbackId;
+  popUpResult();
   const m = r.pieces.find(p => p.mistake)?.mistake;
   const fallback = m ? MESSAGES[m]
     : r.overall >= 80 ? "Amazing — that's the graph!"
@@ -651,7 +745,9 @@ async function showResult(r) {
       const small = document.createElement("span"); small.className = "breakdown"; small.textContent = breakdown;
       msg.append(small);
     }
-    $("result").replaceChildren(badge, msg);
+    const close = document.createElement("button"); close.className = "close"; close.textContent = "✕";
+    close.setAttribute("aria-label", "Close score"); close.onclick = hideResult;
+    $("result").replaceChildren(badge, msg, close);
   };
   if (m === "missing_piece" || m === "off_screen") return show(fallback);   // no need to ask Claude
   show("Thinking…");
@@ -748,6 +844,12 @@ function drawCursor(drawing) {
     ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 28, -Math.PI / 2, -Math.PI / 2 + t * 2 * Math.PI);
     ctx.lineWidth = 6; ctx.strokeStyle = css("--cursor"); ctx.stroke();
   }
+  if (mode === "peace" && !peaceUsed) {                       // green ring + ✌️ while holding a peace sign
+    const t = peaceProgress(performance.now());
+    ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 30, -Math.PI / 2, -Math.PI / 2 + t * 2 * Math.PI);
+    ctx.lineWidth = 8; ctx.strokeStyle = css("--green"); ctx.stroke();
+    ctx.font = "28px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("✌️", cursor.x, cursor.y - 48);
+  }
 }
 function drawTakeover() {                                     // ring fills while a new hand waits to take control
   if (!challenger?.lm) return;
@@ -775,16 +877,36 @@ function render(drawing = false) {
 // Tuning knobs (test these on a real webcam and adjust):
 const HAND = {
   edge: 0.12,               // ignore this much of each camera edge, so you can reach every corner of the page
-  pinchOn: 0.3, pinchOff: 0.4,    // pinch closes below / opens above this (thumb–index gap ÷ hand size, in 3D)
-  releaseMs: 150,                 // fingers must stay open this long to lift the pen (fast moves blur the
+  // The pen (thumb–index gap ÷ hand size, measured in 3D; touching ≈ 0.16, 2 cm apart ≈ 0.28,
+  // 4 cm ≈ 0.44, 6 cm ≈ 0.64):
+  pinchOn: 0.3,                   // START drawing: fingers touching (or very nearly) — nothing starts by itself
+  pinchOff: 0.5,                  // KEEP drawing while the fingers stay close (up to ~5 cm apart); open wider to stop
+  clickOff: 0.4,                  // a pinch on a button lets go sooner (~4 cm), so clicks feel quick
+  releaseMs: 120,                 // fingers must stay open this long to lift the pen (fast moves blur the
                                   //   camera image, so a pinch can look open for a frame or two)
   lostGraceMs: 400,               // if the camera loses your hand for less than this, carry on as if it hadn't…
-  lostGraceDrawingMs: 1200,       // …or this long while you're drawing (fast moves and the camera edge lose it more)
+  lostGraceDrawingMs: 2500,       // …or this long while you're drawing: the line waits for your hand to come back.
+                                  // When it does: fingers still close → the SAME line carries on;
+                                  // fingers open → the line ends where it was (no stray connecting line).
+  gapMs: 150,                     // a pause in tracking longer than this counts as "the hand came back"
   tapMs: 600, tapMovePx: 50,      // a "click" = pinch released within 600 ms, moving less than 50 px
   fistMs: 1000,                   // hold a fist this long to clear (after it's confirmed)
   fistConfirmMs: 300,             // a fist must be seen this long before it counts (filters quick blips)
   fistAfterPinchMs: 600,          // no fist for this long after a pinch ends (hands curl as they relax)
   fistCurl: 1.1,                  // fingertip must be within this × the knuckle's distance from the wrist
+  // ✊ Fist (clear) also needs the thumb tucked in or along the side, with its tip below the top of
+  // the fist. Resting with your thumb up as the pen (fingers closed) is NOT a fist, so pausing between
+  // strokes can't clear. (Thumb tip's distance from the middle of the knuckles ÷ knuckle width:
+  // real fists ≈ 0.6–1.06 on a 3D hand model; a thumb held up as the pen ≈ 1–1.8.)
+  thumbTucked: 1.2,
+  // ✌️ Peace sign (check): pointer + middle finger straight and spread in a V, ring + pinky curled.
+  // Nothing you do while drawing or clicking looks like this.
+  peaceStraight: 0.8,             // a finger is "straight" if tip-to-knuckle ≥ 80% of its length along the joints
+  peaceReach: 1.35,               // …and its tip is ≥ 1.35× as far from the wrist as its knuckle
+  peaceDown: 1.3,                 // ring + pinky count as down if their tips are within 1.3× their knuckles' distance
+  peaceSpread: 1.3,               // the V: fingertips at least 1.3× as far apart as the two knuckles
+  peaceMs: 600,                   // hold a peace sign this long to check (a ring fills up)
+  gestureGapMs: 150,              // a gesture can drop out for this long (a blurry frame) without restarting
 };
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -796,7 +918,8 @@ const extended = (lm, tip, joint) => dist(lm[tip], lm[0]) > dist(lm[joint], lm[0
 // Hand measurements are taken in 3D (camera pixels, with MediaPipe's depth estimate), so tilting the
 // hand toward or away from the camera doesn't change them. Flat 2D distances shrink when the hand
 // tilts, which made a closed pinch look like a curled finger and lifted the pen mid-line.
-const px3 = p => ({ x: p.x * 640, y: p.y * 480, z: (p.z ?? 0) * 640 });
+let camAspect = 4 / 3;     // camera picture width ÷ height (measurements use true proportions)
+const px3 = p => ({ x: p.x * 640, y: p.y * 640 / camAspect, z: (p.z ?? 0) * 640 });
 const dist3 = (a, b) => { a = px3(a); b = px3(b); return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z); };
 // Hand size in camera pixels: wrist → middle knuckle, or knuckle width (scaled to match), whichever
 // is bigger. Bigger = closer to the camera.
@@ -804,6 +927,34 @@ const handSize = lm => Math.max(dist3(lm[0], lm[9]), 1.6 * dist3(lm[5], lm[17]))
 const curled = (lm, tip, knuckle) => dist3(lm[tip], lm[0]) < HAND.fistCurl * dist3(lm[knuckle], lm[0]);
 const isFist = lm => [[8, 5], [12, 9], [16, 13], [20, 17]].every(([tip, knuckle]) => curled(lm, tip, knuckle));
 const pinchRatio = lm => dist3(lm[4], lm[8]) / handSize(lm);   // thumb–index gap relative to hand size
+// How far the thumb tip sticks out from the middle of the knuckles (÷ knuckle width).
+function thumbReach(lm) {
+  const k = [5, 9, 13, 17].map(i => px3(lm[i])), t = px3(lm[4]);
+  const c = { x: mean(k.map(p => p.x)), y: mean(k.map(p => p.y)), z: mean(k.map(p => p.z)) };
+  return Math.hypot(t.x - c.x, t.y - c.y, t.z - c.z) / dist3(lm[5], lm[17]);
+}
+const fourCurled = lm => [[8, 5], [12, 9], [16, 13], [20, 17]].every(([tip, knuckle]) => curled(lm, tip, knuckle));
+// Is the thumb tip on top of the hand (higher than every other part, in the picture)? A thumb held up
+// as the pen is; in a real fist it's tucked across or along the fingers, below the top.
+function thumbOnTop(lm) {
+  const highestOther = Math.min(...[0, 5, 6, 7, 8, 9, 10, 12, 13, 16, 17, 20].map(i => px3(lm[i]).y));
+  return (highestOther - px3(lm[4]).y) / handSize(lm) > -0.05;
+}
+// ✊ Fist (clear) = four fingers curled AND the thumb tucked in (not held up like the pen).
+const isClearFist = lm => fourCurled(lm) && thumbReach(lm) < HAND.thumbTucked && !thumbOnTop(lm);
+// ✌️ Peace sign (check): pointer + middle straight and out, spread in a V; ring + pinky down.
+function fingerOut(lm, k, j1, j2, tip) {
+  const along = dist3(lm[k], lm[j1]) + dist3(lm[j1], lm[j2]) + dist3(lm[j2], lm[tip]);
+  return dist3(lm[k], lm[tip]) >= HAND.peaceStraight * along && dist3(lm[tip], lm[0]) >= HAND.peaceReach * dist3(lm[k], lm[0]);
+}
+const fingerDown = (lm, tip, k) => dist3(lm[tip], lm[0]) < HAND.peaceDown * dist3(lm[k], lm[0]);
+function isPeace(lm) {
+  return fingerOut(lm, 5, 6, 7, 8) && fingerOut(lm, 9, 10, 11, 12)
+    && fingerDown(lm, 16, 13) && fingerDown(lm, 20, 17)
+    && dist3(lm[8], lm[12]) >= HAND.peaceSpread * dist3(lm[5], lm[9]);
+}
+// An open-ish hand (3+ fingers out) — used to unlock fist-clear after a check.
+const handOpen = lm => [[8, 5], [12, 9], [16, 13], [20, 17]].filter(([t, k]) => dist3(lm[t], lm[0]) > 1.3 * dist3(lm[k], lm[0])).length >= 3;
 
 // ----- Main hand: who controls the pen -----
 // MediaPipe doesn't say which hand is which from frame to frame, so we follow the main hand
@@ -819,7 +970,7 @@ const HANDS = {
   matchDist: 0.35,    // how far (fraction of the screen) the main hand can move between sightings
   sameSize: 1.6,      // a hand more than 1.6× bigger/smaller than the main hand is not the same hand
   closer: 1.35,       // a hand 1.35× bigger than the main hand counts as "clearly closer"
-  background: 0.6,    // hands smaller than 60% of the closest hand are background people: ignored
+  background: 0.5,    // hands smaller than half the closest hand are background people: ignored
   minSize: 30,        // hands smaller than this (camera pixels) are too far away to use at all
 };
 let main = null;           // { pos, side, size, seen } of the hand in control; null = pick the closest hand
@@ -846,7 +997,13 @@ function pickMainHand(hands, now) {          // hands: front hands, closest firs
     cursor = null; pointer = null; pinching = false; pinchStart = null; fistSince = 0; challenger = null;
     return follow(h);
   };
-  if (main && now - main.seen > HANDS.forgetMs) main = null;  // main hand gone a while: recalibrate
+  // Only one hand in front of the camera: it's yours — straight away, wherever it reappears and whatever
+  // size blur or a tilt makes it look, and without resetting the pen (so a line can carry on after the
+  // camera lost the hand). Waiting / resetting here is what stopped lines resuming after a dropout.
+  if (hands.length === 1) { challenger = null; return main ? follow(hands[0]) : take(hands[0]); }
+  // Main hand gone a while: recalibrate — but never in the middle of a line (the line is waiting for the
+  // hand to come back; forgetting it here reset the pen and broke the line).
+  if (main && now - main.seen > HANDS.forgetMs && !penIsDown()) main = null;
   if (!hands.length) { challenger = null; return null; }
   if (!main) return take(hands[0]);                           // nobody in control: the closest hand, no waiting
 
@@ -861,7 +1018,7 @@ function pickMainHand(hands, now) {          // hands: front hands, closest firs
     if (bestCost >= HANDS.matchDist) matched = null;
     // Only one hand in front of the camera and it's near where yours was: it's yours, even if blur or
     // a quick turn made it look a different size this frame.
-    if (!matched && hands.length === 1 && dist(hands[0].lm[9], main.pos) < HANDS.matchDist) matched = hands[0];
+    if (!matched && hands.length === 1) matched = hands[0];
   }
 
   // Who could take over? While the main hand is visible, only a clearly closer hand.
@@ -881,7 +1038,7 @@ function pickMainHand(hands, now) {          // hands: front hands, closest firs
 
 let landmarker, lastVideoTime = -1;
 let pointer = null;              // smoothed pointer position on the page (viewport pixels)
-let mode = "none";               // "point" | "fist" | "none"
+let mode = "none";               // "point" | "fist" | "peace" | "none"
 let pinchStart = null;           // where/when the current pinch began: {t, x, y, onCanvas}
 let hoverEl = null;
 
@@ -922,8 +1079,16 @@ const PEN = {
   settleMs: 300,          // just after lifting, keep the drawing speed while the filter settles (no jump)
   catchUpPx: 200,         // pen up: every 200 px your hand moves shrinks the pointer–hand gap to ~37%
   returnMs: 250,          // off the graph it also catches up over time (~this long)
-  pushZone: 0.1,          // drawing with your thumb in the outer 10% of the camera picture…
-  pushSpeed: 450,         // …keeps the pen moving that way, up to this many screen pixels per second
+  leaveDist: 60,          // …and once your hand is this many pixels from where you lifted the pen
+  jumpFrac: 0.05,         // a one-frame jump bigger than 5% of the screen width (drawing moves < 2%/frame) is a
+                          //   tracking glitch, not your hand: ignore it (a real fast move is only delayed 1 frame)
+  pressMs: 100,           // the pen holds still for this long after the fingers touch (pressing the pointer
+                          //   finger onto the thumb nudges the thumb, which drew little hooks)…
+                          // …and while the fingers are coming apart (letting go nudges it too)
+  pushSide: 0.15, pushSideFull: 0.04,   // edge push starts 15% in from the left/right of the camera picture,
+  pushTop: 0.22, pushTopFull: 0.1,      //   22% from the top/bottom (fingers / wrist leave the picture sooner there),
+                                        //   and is at full speed by 4% / 10% from the edge
+  pushSpeed: 520,         // full push speed, screen pixels per second
 };
 // Pen speed setting → [slow gain, fast gain]: pen distance ÷ hand distance for slow / quick movement.
 const penGains = () => $("penSpeed").value.split(",").map(Number);
@@ -950,38 +1115,73 @@ let handAt = null;               // steadied hand position (viewport pixels), la
 let penOffset = { x: 0, y: 0 };  // pointer − hand: grows while drawing slowly, shrinks to 0 after
 let lastMoveT = 0;
 let penUpAt = 0;                 // when the pen was last lifted (0 = it's down)
+let liftedAt = null;             // where the hand was when the pen was lifted
+let lastRaw = null, jumpTo = null; // glitch filter: last accepted raw position, and an unconfirmed jump
 let handGraph = null;            // where the hand itself is, in graph units (no pen-speed scaling)
 let pushed = 0;                  // total distance the pen was pushed at the camera edge (graph units)
+let heading = { x: 0, y: 0 };    // smoothed direction the hand is moving (screen), for the edge push
 const penIsDown = () => (pinching && !!pinchStart?.onCanvas) || (spaceHeld && !!cursor);
 
 // Move the page pointer to the thumb tip, and work out where that is on the graph (if over it).
 function movePointer(tip, now) {
-  const raw = viewportPointFor(tip, false);
-  if (!pointer) { steadyX.reset(); steadyY.reset(); handAt = null; penOffset = { x: 0, y: 0 }; handSpeed = 0; }
+  let raw = viewportPointFor(tip, false);
+  if (!pointer) { steadyX.reset(); steadyY.reset(); handAt = null; penOffset = { x: 0, y: 0 }; handSpeed = 0; lastRaw = null; jumpTo = null; heading = { x: 0, y: 0 }; }
+  // One-frame tracking glitch? A single frame far from both the frame before AND the frame after is
+  // ignored: hold the last position for that one frame. If the next frame is also away from the old
+  // position, the hand really moved (fast) and we follow it. A hand that just came back after the camera
+  // lost it is never treated as a glitch.
+  if (now - lastMoveT > HAND.gapMs) { lastRaw = null; jumpTo = null; }
+  if (lastRaw && Math.hypot(raw.x - lastRaw.x, raw.y - lastRaw.y) > PEN.jumpFrac * innerWidth) {
+    if (!jumpTo) { jumpTo = raw; raw = lastRaw; }               // first far frame: wait one frame to see
+    else jumpTo = null;                                         // second far frame in a row: it's real
+  } else jumpTo = null;
+  lastRaw = raw;
   const down = penIsDown(), opts = down ? PEN.drawFilter : PEN.pointFilter;
-  if (down) penUpAt = 0; else if (!penUpAt) penUpAt = now;
+  if (down) { penUpAt = 0; liftedAt = null; } else if (!penUpAt) penUpAt = now;
   const settling = !down && now - penUpAt < PEN.settleMs;    // the pen was lifted a moment ago
   const hand = { x: steadyX.filter(raw.x, now / 1000, opts), y: steadyY.filter(raw.y, now / 1000, opts) };
   if (handAt) {
     const dt = Math.max(0, now - lastMoveT);
     const dx = hand.x - handAt.x, dy = hand.y - handAt.y;
     if (dt > 0) handSpeed += 0.5 * (Math.hypot(dx, dy) / innerWidth / (dt / 1000) - handSpeed);
+    // Fingers just touched, or coming apart: hold the pen still (k = −1 cancels the hand's movement).
+    const pressing = down && pinching && pinchStart && now - pinchStart.t < PEN.pressMs;
+    const releasing = down && pinching && openSince > 0;
     if (down || settling) {      // pen down: slow movement is scaled down, fast movement isn't
-      const k = penGain(handSpeed) - 1;
+      const k = pressing || releasing ? -1 : penGain(handSpeed) - 1;
       penOffset.x += k * dx; penOffset.y += k * dy;
-      // Out of room? The slower pen needs more hand movement than the camera can see, so holding
-      // your thumb at the edge of the picture keeps the pen going that way (deeper = faster).
-      if (down) {
-        const z = PEN.pushZone, depth = v => (v < z ? (v - z) / z : v > 1 - z ? (v - (1 - z)) / z : 0);
-        const step = PEN.pushSpeed * dt / 1000, px = -depth(tip.x) * step, py = depth(tip.y) * step;
-        penOffset.x += px; penOffset.y += py;                 // (camera is mirrored left↔right)
+      // Out of room? The slower pen needs more hand movement than the camera can see. As your thumb gets
+      // near the edge of the picture while you're moving TOWARD that edge, the pen keeps going that way
+      // (closer to the edge = faster). It starts well inside the picture, where the camera still sees
+      // your whole hand, and it only pushes the way you were already going, so a flat line drawn near
+      // the top doesn't creep upward.
+      if (down && !pressing && !releasing) {
+        if (Math.hypot(dx, dy) > 0.5) {                        // which way is the hand going? (kept while it holds still)
+          const L = Math.hypot(dx, dy), a = Math.min(1, dt / 250);
+          heading.x += a * (dx / L - heading.x); heading.y += a * (dy / L - heading.y);
+        }
+        const ramp = (v, inner, outer) => Math.min(1, Math.max(0, (v - inner) / (outer - inner)));
+        const right = ramp(1 - tip.x, 1 - PEN.pushSide, 1 - PEN.pushSideFull), left = ramp(tip.x, 1 - PEN.pushSide, 1 - PEN.pushSideFull);
+        const down_ = ramp(tip.y, 1 - PEN.pushTop, 1 - PEN.pushTopFull), up = ramp(1 - tip.y, 1 - PEN.pushTop, 1 - PEN.pushTopFull);
+        const step = PEN.pushSpeed * dt / 1000;               // (camera is mirrored left↔right)
+        // Only when CLEARLY heading toward the edge (> 0.6 of the direction), fading in from there — the
+        // small up/down jitter of a sideways line must not add up into a drift.
+        const toward = h => Math.max(0, (h - 0.6) / 0.4);
+        const px = step * (right * toward(heading.x) - left * toward(-heading.x));
+        const py = step * (down_ * toward(heading.y) - up * toward(-heading.y));
+        penOffset.x += px; penOffset.y += py;
         const r = $("board").getBoundingClientRect();
         pushed += Math.hypot(px / r.width * (XMAX - XMIN), py / r.height * (YMAX - YMIN));
       }
     } else {                     // pen up: catch up with the hand as it moves (holding still keeps the pen put)
       const moving = handSpeed > PEN.slowSpeed;               // real movement, not shake
       let decay = moving ? Math.exp(-Math.hypot(dx, dy) / PEN.catchUpPx) : 1;
-      if (!cursor) decay *= Math.exp(-dt / PEN.returnMs);    // off the graph: also catch up over time
+      // Once your hand has moved away from where you lifted the pen (or the pointer is off the graph), you're
+      // not carrying on the line: the pointer catches up with your hand over time, even if your hand has
+      // stopped (e.g. on a button you're about to pinch).
+      if (!liftedAt) liftedAt = { ...hand };
+      const movedAway = Math.hypot(hand.x - liftedAt.x, hand.y - liftedAt.y) > PEN.leaveDist;
+      if (!cursor || movedAway) decay *= Math.exp(-dt / PEN.returnMs);
       penOffset.x *= decay; penOffset.y *= decay;
     }
   }
@@ -1021,11 +1221,38 @@ function clickAt(x, y) {
 // 0 → 1 as a confirmed fist is held; 1 = clear.
 const fistProgress = now => Math.min(1, Math.max(0, (now - fistSince - HAND.fistConfirmMs) / HAND.fistMs));
 
-function oneHand(lm, now) {
+const peaceProgress = now => Math.min(1, Math.max(0, (now - peaceSince) / HAND.peaceMs));
+
+function oneHand(lm, now, gap = 0) {
+  const ratio = pinchRatio(lm);
+  // The hand just came back after the camera lost it: decide right away from what the fingers are doing
+  // NOW (no waiting). Still close → the line carries on. Open → the line ends where it was, and the pen
+  // does not draw a line across to where the hand is now.
+  if (gap > HAND.gapMs && pinching && ratio >= HAND.pinchOff) {
+    pinching = false; pinchEndedAt = now; pinchStart = null; openSince = 0;
+  }
   movePointer(lm[4], now);                                    // thumb tip = pen and pointer
-  // ✊ Fist = clear. A pinch always wins: no fist while pinching, or just after letting go of one,
-  // and a fist has to be held steady for fistConfirmMs before it counts.
-  if (!pinching && now - pinchEndedAt > HAND.fistAfterPinchMs && isFist(lm)) {
+  // ✌️ Peace sign = check, held for peaceMs (a green ring fills). Never while drawing. Only frames that
+  // really are a peace sign do anything here — every other frame goes on to the normal pinch/fist logic.
+  if (!pinching && isPeace(lm)) {
+    if (!peaceSince || now - peaceSeenAt > HAND.gestureGapMs) { peaceSince = now; peaceUsed = false; }
+    peaceSeenAt = now; mode = "peace"; fistSince = 0;
+    if (!peaceUsed && peaceProgress(now) >= 1) {
+      peaceUsed = true;
+      clearLocked = true;                                     // folding the fingers into a fist must not clear
+      if (revealed) toast("Already checked: 🧽 Clear to retry, or Next ➜");
+      else check();
+    }
+    return;
+  }
+  if (now - peaceSeenAt > HAND.gestureGapMs) peaceSince = 0;  // (a single blurry frame doesn't restart it)
+  if (pinching || handOpen(lm)) clearLocked = false;          // the hand opened (or pinched): fist-clear allowed again
+  if (clearLocked && isClearFist(lm)) {                       // tell them once why the fist isn't clearing
+    if (!lockToldAt || now - lockToldAt > 4000) { toast("Open your hand first, then ✊ to clear"); lockToldAt = now; }
+  }
+  // ✊ Fist (thumb tucked in) = clear. A pinch always wins: no fist while pinching, or just after letting
+  // go of one, and a fist has to be held steady for fistConfirmMs before it counts.
+  if (!pinching && !clearLocked && now - pinchEndedAt > HAND.fistAfterPinchMs && isClearFist(lm)) {
     if (!fistSince) fistSince = now;
     if (now - fistSince >= HAND.fistConfirmMs) {
       mode = "fist"; pinchStart = null;
@@ -1035,11 +1262,12 @@ function oneHand(lm, now) {
   } else { fistSince = 0; fistUsed = false; }
   mode = "point";
   const wasPinching = pinching;
-  const ratio = pinchRatio(lm), pointerCurled = curled(lm, 8, 5);   // thumb on a curled finger = fist, not pinch
-  // Only OPEN fingers (or a full fist) lift the pen. A curled pointer finger can only stop a pinch from
-  // starting (that's a fist forming), because a tilted pinch can look curled while the fingers still touch.
-  const open = ratio > HAND.pinchOff || isFist(lm);
-  if (!pinching && ratio < HAND.pinchOn && !pointerCurled) { pinching = true; openSince = 0; }
+  // Start: fingers touching, and it's not a fist (in a fist the thumb also rests near the pointer finger).
+  // Stop: fingers opened past pinchOff (held releaseMs), or a real fist. Nothing else lifts the pen —
+  // a tilted hand can make single fingers look curled, so that is never used here.
+  const fist = isClearFist(lm);
+  const open = ratio > (pinching && pinchStart && !pinchStart.onCanvas ? HAND.clickOff : HAND.pinchOff) || fist;
+  if (!pinching && ratio < HAND.pinchOn && !fist) { pinching = true; openSince = 0; }
   else if (pinching && open) {                                // only lift the pen once the fingers STAY open
     if (!openSince) openSince = now;
     if (now - openSince >= HAND.releaseMs) pinching = false;
@@ -1058,6 +1286,7 @@ let handSeenAt = -Infinity;      // when the main hand was last seen
 function noHands() {
   handGraph = null;
   mode = "none"; pointer = null; cursor = null; pinching = false; pinchStart = null; fistSince = 0; openSince = 0;
+  peaceSince = 0;                  // (clearLocked stays on: only seeing the hand OPEN unlocks fist-clear)
 }
 
 // Show the page pointer (hidden over the graph, where the graph's own cursor shows) and highlight what it would click.
@@ -1068,9 +1297,12 @@ function updatePointerUI() {
   if (show) {
     el.style.transform = `translate(${pointer.x}px, ${pointer.y}px)`;
     el.className = pinching ? "pinch" : "";
-    el.textContent = mode === "fist" ? "✊" : "";
+    el.textContent = mode === "fist" ? "✊" : mode === "peace" ? "✌️" : "";
+    el.style.background = mode === "peace" && !peaceUsed       // green ring fills while holding a peace sign
+      ? `conic-gradient(var(--green) ${peaceProgress(performance.now()) * 360}deg, #ffffff99 0)` : "";
   }
   const target = show && mode === "point" ? clickableAt(pointer.x, pointer.y) : null;
+  if (mode === "peace" && !peaceUsed && peaceProgress(performance.now()) < 0.05 && !revealed) toast("✌️ Hold it… checking");
   if (target !== hoverEl) {
     hoverEl?.classList.remove("hand-hover");
     target?.classList.add("hand-hover");
@@ -1081,18 +1313,24 @@ function updatePointerUI() {
 async function start() {
   $("eq").textContent = "Starting camera…";
   const video = $("cam");
-  video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+  // A sharper picture (same 4:3 shape as before) gives the hand tracker more detail on the fingertips,
+  // so the thumb tip wobbles less, especially when you sit back from the camera.
+  video.srcObject = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 960 }, height: { ideal: 720 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30 } } });
   await new Promise(r => video.onloadeddata = r);
+  if (video.videoWidth && video.videoHeight) camAspect = video.videoWidth / video.videoHeight;
   const files = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
   landmarker = await HandLandmarker.createFromOptions(files, {
     baseOptions: {
       modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
       delegate: "GPU",
     },
-    // Look for up to 4 hands so a background person can't use up the slots meant for yours;
-    // the stricter confidences cut "ghost" hands (e.g. a hand resting in someone's lap).
+    // Look for up to 4 hands so a background person can't use up the slots meant for yours.
+    // Presence/tracking confidence are kept LOW so the tracker holds on to your hand through motion blur
+    // and odd angles instead of dropping it mid-line (stricter settings made lines cut out). Background
+    // "ghost" hands are filtered out by size instead (frontHands).
     runningMode: "VIDEO", numHands: 4,
-    minHandDetectionConfidence: 0.6, minHandPresenceConfidence: 0.6, minTrackingConfidence: 0.5,
+    minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.35, minTrackingConfidence: 0.35,
   });
   newEquation();
   loop();
@@ -1102,7 +1340,7 @@ async function start() {
 function step(allHands, now) {
   const hands = frontHands(allHands, now);                    // drop people in the background, closest first
   const mainHand = pickMainHand(hands, now);
-  if (mainHand) { handSeenAt = now; oneHand(mainHand.lm, now); }  // only the main hand points, draws, and clicks
+  if (mainHand) { const gap = now - handSeenAt; handSeenAt = now; oneHand(mainHand.lm, now, gap); }  // only the main hand points, draws, and clicks
   else if (pointer && now - handSeenAt < (penIsDown() ? HAND.lostGraceDrawingMs : HAND.lostGraceMs)) {}   // tracking blink: keep the pen as it was
   else noHands();
   updatePointerUI();
@@ -1124,13 +1362,14 @@ function loop() {
 function drawFrame() {           // record the pen and redraw (also used by tests)
   // Draw only when the pinch started on the graph (so a click that drifts onto it doesn't draw).
   const drawing = !!cursor && !revealed &&
-    (($("usePinch").checked && pinching && !!pinchStart?.onCanvas) || spaceHeld);
+    ((pinching && !!pinchStart?.onCanvas) || spaceHeld);
   if (cursor) {
     const [gx, gy] = toGraph(cursor.x, cursor.y);
     trace.push({ x: gx, y: gy, drawing, hx: handGraph?.x, hy: handGraph?.y, pushed });
     if (trace.length > 5000) {
       trace.shift(); if (strokeStart > 0) strokeStart--;
       if (pendingSnap) { pendingSnap.start--; if (pendingSnap.start < 0) pendingSnap = null; }
+      if (joined) { joined.start--; joined.cleanEnd--; if (joined.start < 0) joined = null; }
       if (lastStroke) { lastStroke.start--; lastStroke.end--; if (lastStroke.start < 0) lastStroke = null; }
     }
   }
@@ -1139,7 +1378,14 @@ function drawFrame() {           // record the pen and redraw (also used by test
     if (start < 0) { flushSnap(); start = joinStroke(trace.at(-1)); }   // a new stroke (maybe joining the last)
     strokeStart = start >= 0 ? start : trace.length - 1; wasDrawing = true;
   }
-  else if (!drawing && wasDrawing) finishStroke();                                     // pen up → snap soon
+  else if (!drawing && wasDrawing) {                                                    // pen up → snap soon
+    // Always mark where the line ended, even when the hand has left the camera (then no pen position is
+    // recorded this frame). Without the marker, a new line started later was glued onto this one with a
+    // straight line across the screen.
+    const last = trace.at(-1);
+    if (last?.drawing) trace.push({ ...last, drawing: false });
+    finishStroke();
+  }
   if (!drawing && pendingSnap && performance.now() - pendingSnap.at > SNAP_WAIT.ms) flushSnap();
   render(drawing);
 }
@@ -1153,16 +1399,29 @@ function renderDots() {                  // green = checked this round, yellow =
   }));
 }
 function clearDrawing() {                // same equation, fresh start (also lets you retry after Check)
-  trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1; lastStroke = null; pendingSnap = null;
-  $("result").replaceChildren();
+  trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1; lastStroke = null; pendingSnap = null; joined = null;
+  hideResult();
 }
-function newEquation() {
+// Previous / Next work like a browser's back / forward: Previous goes back to earlier equations, and
+// after going back, Next steps forward through them again before making brand-new ones.
+const seen = [];           // equations shown so far, in order
+let seenAt = -1;           // which one is on screen
+function showEquation(eqn) {
+  level = eqn; clearDrawing();
+  $("eq").textContent = level.label;
+  $("prev").disabled = seenAt <= 0;
+  renderDots();
+}
+function newEquation(fresh = false) {                         // Next (fresh = skip ahead to a new one)
   if (doneInRound >= ROUND) doneInRound = 0;                  // start a new round of 5
+  if (!fresh && seenAt < seen.length - 1) { seenAt++; return showEquation(seen[seenAt]); }
   let next;
   do { next = randomEquation($("kind").value); } while (level && next.label === level.label);
-  level = next; clearDrawing();
-  $("eq").textContent = level.label;
-  renderDots();
+  seen.splice(seenAt + 1); seen.push(next); seenAt = seen.length - 1;
+  showEquation(next);
+}
+function prevEquation() {
+  if (seenAt > 0) { seenAt--; showEquation(seen[seenAt]); }
 }
 function check() {
   if (revealed || !level) return;                       // avoid repeat checks / repeat Claude calls
@@ -1173,8 +1432,9 @@ function check() {
   doneInRound = Math.min(ROUND, doneInRound + 1); renderDots();
 }
 $("clear").onclick = clearDrawing;
-$("next").onclick = newEquation;
-$("kind").onchange = newEquation;
+$("next").onclick = () => newEquation();
+$("prev").onclick = prevEquation;
+$("kind").onchange = () => newEquation(true);                // a different kind: straight to a new equation
 $("check").onclick = check;
 $("zoomIn").onclick = () => setZoom(zoomIdx - 1);
 $("zoomOut").onclick = () => setZoom(zoomIdx + 1);
@@ -1185,6 +1445,7 @@ addEventListener("keydown", e => {
   if (e.code === "Enter") check();
   if (e.code === "KeyC" || e.code === "Backspace") clearDrawing();
   if (e.code === "KeyN") newEquation();
+  if (e.code === "KeyP") prevEquation();
   if (e.code === "Equal" || e.code === "NumpadAdd") setZoom(zoomIdx - 1);
   if (e.code === "Minus" || e.code === "NumpadSubtract") setZoom(zoomIdx + 1);
 });

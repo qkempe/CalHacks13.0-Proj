@@ -9,17 +9,24 @@ Trace math functions in the air with your finger. A webcam tracks your hand, the
 
 Your thumb tip is the pen: bring your pointer finger down onto it and hold on the graph (or hold Space) to draw. Press Enter to check.
 
+Everything fits on one screen: the title top-left, the ⬅ Previous / 🧽 Clear / ✅ Check / Next ➜ buttons across the top, the graph, and a side panel with the equation, your feedback, and the settings. Previous and Next work like back/forward (keys: P / N).
+
 Hand controls:
 - Quick pinch on a button, checkbox, or dropdown to click it
-- Make a tight fist and hold it for about 1 second to clear (a ring fills up). Pinching always wins, so curling your fingers while drawing won't clear
+- ✌️ Make a peace sign (pointer + middle finger up in a V, the others folded) and hold it for about 0.6 seconds to check (a green ring fills up). Your score pops up on the graph, then after about 4 seconds moves to the panel on the right. Clear, Next or Previous (or ✕) removes it
+- ✊ Make a fist with your thumb tucked in (or along the side) and hold it for about 1 second to clear (a ring fills up). Pinching always wins, so curling your fingers while drawing won't clear. Resting with your thumb up like the pen is not a fist, so pausing between strokes never clears
+- After a peace-sign check, a fist can't clear until you've opened your hand, so folding your fingers down never wipes your result
 
 Zoom with the − / + buttons in the corner of the graph, or the + and − keys.
 
 Steady drawing (nobody's hand is steady in the air):
 - While you draw, the pen moves less than your hand, like a mouse: slow, careful movement (and shake) is scaled down the most, quicker sweeps a bit less. **Pen speed** sets how much: 🐌 Steady (about 0.1–0.3× your hand), ✍️ Normal (about 0.2–0.45×), ⚡ Fast (about 0.4–1×). After you lift the pen it stays where you stopped while your hand holds still, so you can pinch again and carry on; as soon as your hand moves, the pointer catches up with it so you can reach the buttons.
 - Out of room? Your hand needs more space than the pen, so if your hand reaches the edge of the camera picture while drawing, just hold it there: the pen keeps moving that way (further into the edge = faster). While drawing, the pen can't leave the graph; it slides along the border instead.
-- The line only breaks when you open your fingers. A pinch that looks open for a split second (motion blur), a tilted hand, or the camera losing your hand for a moment won't lift the pen.
-- When you lift the pen (and keep it up for about half a second), the game works out what you meant: a straight line (any angle), a curve, two straight lines meeting at a corner, or a free shape. It looks at the path your hand actually took on camera, not just the slowed-down pen line, so the shape matches what you did. The game only uses lines and parabolas, so even a messy stroke that's reasonably close to one gets cleaned up into it; scribbles stay as drawn. Little hooks at the start or end (from pinching or letting go) are ignored.
+- The camera picture is sharper (960×720) so the thumb tip wobbles less, one-frame tracking glitches are ignored, and the pen holds still for a moment when your fingers touch and when they come apart, so pinching doesn't put hooks on the ends of lines.
+- Drawing turns ON when your thumb and pointer finger touch, and stays on while they stay close (up to about 5 cm apart), so you don't have to squeeze. Open your fingers wider to turn it OFF; that takes effect right away. A tilted hand never lifts the pen; only open fingers or a real fist do.
+- If the camera loses your hand in the middle of a line, the line waits (up to 2.5 seconds). Bring your hand back with your fingers still close and the SAME line carries on; bring it back with your fingers open and the line ends where it was, with no stray line drawn across to your hand. Gone longer than that, the line ends and your next pinch starts a new one.
+- If your hand gets near the edge of the camera picture while you're drawing toward that edge, the pen keeps going that way, so you can reach the whole graph. It starts well before the very edge (where the camera loses fingers) and only pushes the way you were already moving, so flat lines near the top or bottom don't creep.
+- When you lift the pen (and keep it up for about half a second), the game works out what you meant: a straight line (any angle), a curve, two straight lines meeting at a corner, or a free shape. It looks at the path your hand actually took on camera, not just the slowed-down pen line, so the shape matches what you did. The game only uses lines and parabolas, so even a messy stroke that's reasonably close to one gets cleaned up into it; scribbles stay as drawn. It also leans toward the kind of graph you're tracing (just its type, never the answer): on a parabola, bends count as curves much more easily and a stroke is never turned into two straight lines with a corner; on a line, a slight bow stays straight. Little hooks at the start or end (from pinching or letting go) are ignored.
 - Nothing snaps while you're still drawing: if the camera loses your hand for a moment (up to about a second) or the pen seems to lift for a split second, just keep going and it stays one stroke. It never looks at the answer, so a wrong shape stays wrong; it just looks neater.
   - **Snap to clean shape ON:** the stroke becomes that clean line or curve.
   - **OFF:** the shake is smoothed out and the stroke is pulled partway toward the shape.
