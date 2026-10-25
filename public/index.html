@@ -272,6 +272,8 @@ const SHAPE = {
   lopsided: 0.1,      // "toward one end" = the bulge's centre is > 10% of the length off the middle
   bendFloor: 0.2,     // and any curve must bulge by at least 0.2 graph units (bigger than hand shake)
   pullOff: 0.6,       // snap OFF: move the steadied stroke 60% of the way toward the recognised shape
+  assistLine: 0.07,   // a messy stroke within 7% (of its size) of a straight line still becomes one…
+  assistCurve: 0.08,  // …or within 8% of a curve (the game only uses lines and parabolas)
   cornerAngle: 30,    // two lines meeting at a corner must differ in direction by more than 30°…
   cornerBetter: 0.6,  // …and fit at least 40% better than the best single line/curve
   hookLen: 0.45,      // a corner piece shorter than this (graph units) at the start/end is a hook: dropped
@@ -324,10 +326,10 @@ function fitCurve(pts) {
   if (span < 0.5) return null;                                // too narrow to be a y = f(x) curve
   // Does it double back on itself (not a function)? Judged on a very blurred copy, so shake on the
   // steep parts of a U doesn't count as going backwards.
-  const broad = blur(pts, 0.5 / SHAPE.spacing).map(p => p.x);
+  const broad = blur(pts, 0.9 / SHAPE.spacing).map(p => p.x);
   let travel = 0;
   for (let i = 1; i < broad.length; i++) travel += Math.abs(broad[i] - broad[i - 1]);
-  if (travel > (Math.max(...broad) - Math.min(...broad)) * 1.2) return null;
+  if (travel > (Math.max(...broad) - Math.min(...broad)) * 1.3) return null;
   const coef = fitPolynomial(xs, pts.map(p => p.y), 2);
   if (!coef) return null;
   const f = x => coef[0] + coef[1] * x + coef[2] * x * x;
@@ -405,6 +407,13 @@ function curveShape(pts, curve) {
   if (pts[0].x > pts.at(-1).x) clean.reverse();               // keep the direction it was drawn in
   return { kind: "curve", clean, toward: p => ({ x: p.x, y: curve.f(p.x) }), err: curve.err, curve };
 }
+function lineShape(pts, line) {
+  const ts = pts.map(line.along), t0 = ts[0], t1 = ts.at(-1);
+  const a = Math.min(...ts), b = Math.max(...ts), n = Math.max(2, Math.round((b - a) / SHAPE.spacing));
+  const clean = Array.from({ length: n + 1 }, (_, i) => line.at(a + (b - a) * i / n));
+  if (t0 > t1) clean.reverse();
+  return { kind: "line", clean, toward: line.project, err: line.err };
+}
 function recogniseOne(pts) {
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
   const size = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
@@ -414,14 +423,29 @@ function recogniseOne(pts) {
   const need = !lineOk ? SHAPE.bendIfNotLine : lopsided(pts) > SHAPE.lopsided ? SHAPE.bendIfLopsided : SHAPE.bend;
   const bends = curve && curve.bulge > Math.max(SHAPE.bendFloor, need * size);
   if (curveFits && bends) return curveShape(pts, curve);      // a real bend, not a slightly bowed line
-  if (lineOk) {
-    const ts = pts.map(line.along), t0 = ts[0], t1 = ts.at(-1);
-    const a = Math.min(...ts), b = Math.max(...ts), n = Math.max(2, Math.round((b - a) / SHAPE.spacing));
-    const clean = Array.from({ length: n + 1 }, (_, i) => line.at(a + (b - a) * i / n));
-    if (t0 > t1) clean.reverse();
-    return { kind: "line", clean, toward: line.project, err: line.err, curve };
-  }
+  if (lineOk) return { ...lineShape(pts, line), curve };
+  // Not a clean match — but if it's still reasonably close to a line or a curve, assist toward that.
+  const curveClose = curve && curve.err < SHAPE.assistCurve * size && curve.bulge > SHAPE.bendFloor;
+  const lineClose = line.err < SHAPE.assistLine * size;
+  if (curveClose && (!lineClose || curve.err < line.err * SHAPE.curveBetter)) return curveShape(pts, curve);
+  if (lineClose) return lineShape(pts, line);
   return { kind: "free", clean: pts, toward: p => p, err: Math.min(line.err, curve?.err ?? Infinity), curve };
+}
+// The pen moves slower when your hand moves slower, so the drawn line is a WARPED copy of the shape
+// your hand made (draw a U slowly at the bottom and the bottom gets squashed). The hand's own path, as
+// the camera saw it, is the shape you meant. So we take that path, scale and slide it to sit exactly on
+// your drawing, and recognise THAT. (Falls back to the drawn line if the camera-edge push moved the pen
+// a lot, or for strokes joined to an older, already cleaned-up one.)
+function handShape(raw) {
+  if (raw.some(p => p.hx === undefined || p.hx === null)) return raw;
+  let penLen = 0; for (let i = 1; i < raw.length; i++) penLen += Math.hypot(raw[i].x - raw[i - 1].x, raw[i].y - raw[i - 1].y);
+  if (raw.at(-1).pushed - raw[0].pushed > 0.15 * penLen) return raw;
+  const mx = mean(raw.map(p => p.x)), my = mean(raw.map(p => p.y)), hx = mean(raw.map(p => p.hx)), hy = mean(raw.map(p => p.hy));
+  let num = 0, den = 0;
+  for (const p of raw) { const ax = p.hx - hx, ay = p.hy - hy; num += ax * (p.x - mx) + ay * (p.y - my); den += ax * ax + ay * ay; }
+  const k = den > 0 ? num / den : 0;                          // best scale from hand path to drawing
+  if (!(k > 0.05 && k < 3)) return raw;
+  return raw.map(p => ({ x: mx + k * (p.hx - hx), y: my + k * (p.hy - hy) }));
 }
 // Clean up trace[start…] (the stroke that just finished) in place.
 function snapStroke(start) {
@@ -430,7 +454,7 @@ function snapStroke(start) {
   while (end + 1 < trace.length && trace[end + 1].drawing) end++;
   const raw = trace.slice(start, end + 1);
   if (raw.length < 3) return;
-  let pts = resample(raw, SHAPE.spacing);
+  let pts = resample(handShape(raw), SHAPE.spacing);
   pts = blur(pts, SHAPE.blur / SHAPE.spacing);
   let out = pts, kind = "free";
   if (pts.length >= 8) {
@@ -477,9 +501,30 @@ function fitPolynomial(xs, ys, degree) {
   }
   return b.map((v, i) => v / A[i][i]);
 }
-function finishStroke() {                                     // pen lifted (or Check pressed)
-  if (wasDrawing) snapStroke(strokeStart);
+// Don't snap the moment the pen lifts: a blurry frame or the camera losing your hand for a moment
+// can look like a lift. Wait until it has stayed up a little while; if you carry on drawing near where
+// the line stopped before then, it's the same stroke and nothing snaps in between.
+const SNAP_WAIT = { ms: 600, resumeDist: 0.6 };   // wait 0.6 s; carry on if you restart within 0.6 graph units
+let pendingSnap = null;    // { start, at } of a finished stroke that will be cleaned up soon
+function finishStroke() {                                     // pen lifted
+  if (wasDrawing) pendingSnap = { start: strokeStart, at: performance.now() };
   wasDrawing = false; strokeStart = -1;
+}
+function flushSnap() {                                        // clean up the waiting stroke now
+  if (!pendingSnap) return;
+  const start = pendingSnap.start; pendingSnap = null;
+  snapStroke(start);
+}
+function strokeEnd(start) { let end = start; while (end + 1 < trace.length && trace[end + 1].drawing) end++; return end; }
+// Pen down again: carry on the waiting stroke if we're near where it stopped. → its start, or -1
+function resumeStroke(penAt) {
+  const p = pendingSnap;
+  if (!p || performance.now() - p.at > SNAP_WAIT.ms) return -1;
+  const end = strokeEnd(p.start), tail = trace[end];
+  if (Math.hypot(tail.x - penAt.x, tail.y - penAt.y) > SNAP_WAIT.resumeDist) return -1;
+  trace.splice(end + 1, trace.length - 1 - (end + 1));       // drop the hover points in the gap
+  pendingSnap = null;
+  return p.start;
 }
 
 // ---------- Scoring (Person B) ----------
@@ -733,7 +778,8 @@ const HAND = {
   pinchOn: 0.3, pinchOff: 0.4,    // pinch closes below / opens above this (thumb–index gap ÷ hand size, in 3D)
   releaseMs: 150,                 // fingers must stay open this long to lift the pen (fast moves blur the
                                   //   camera image, so a pinch can look open for a frame or two)
-  lostGraceMs: 400,               // if the camera loses your hand for less than this, carry on as if it hadn't
+  lostGraceMs: 400,               // if the camera loses your hand for less than this, carry on as if it hadn't…
+  lostGraceDrawingMs: 1200,       // …or this long while you're drawing (fast moves and the camera edge lose it more)
   tapMs: 600, tapMovePx: 50,      // a "click" = pinch released within 600 ms, moving less than 50 px
   fistMs: 1000,                   // hold a fist this long to clear (after it's confirmed)
   fistConfirmMs: 300,             // a fist must be seen this long before it counts (filters quick blips)
@@ -904,6 +950,8 @@ let handAt = null;               // steadied hand position (viewport pixels), la
 let penOffset = { x: 0, y: 0 };  // pointer − hand: grows while drawing slowly, shrinks to 0 after
 let lastMoveT = 0;
 let penUpAt = 0;                 // when the pen was last lifted (0 = it's down)
+let handGraph = null;            // where the hand itself is, in graph units (no pen-speed scaling)
+let pushed = 0;                  // total distance the pen was pushed at the camera edge (graph units)
 const penIsDown = () => (pinching && !!pinchStart?.onCanvas) || (spaceHeld && !!cursor);
 
 // Move the page pointer to the thumb tip, and work out where that is on the graph (if over it).
@@ -925,9 +973,10 @@ function movePointer(tip, now) {
       // your thumb at the edge of the picture keeps the pen going that way (deeper = faster).
       if (down) {
         const z = PEN.pushZone, depth = v => (v < z ? (v - z) / z : v > 1 - z ? (v - (1 - z)) / z : 0);
-        const step = PEN.pushSpeed * dt / 1000;
-        penOffset.x += -depth(tip.x) * step;                  // camera is mirrored left↔right
-        penOffset.y += depth(tip.y) * step;
+        const step = PEN.pushSpeed * dt / 1000, px = -depth(tip.x) * step, py = depth(tip.y) * step;
+        penOffset.x += px; penOffset.y += py;                 // (camera is mirrored left↔right)
+        const r = $("board").getBoundingClientRect();
+        pushed += Math.hypot(px / r.width * (XMAX - XMIN), py / r.height * (YMAX - YMIN));
       }
     } else {                     // pen up: catch up with the hand as it moves (holding still keeps the pen put)
       const moving = handSpeed > PEN.slowSpeed;               // real movement, not shake
@@ -937,6 +986,9 @@ function movePointer(tip, now) {
     }
   }
   handAt = hand; lastMoveT = now;
+  { const r = $("board").getBoundingClientRect();
+    const [gx, gy] = toGraph((hand.x - r.left) / r.width * W, (hand.y - r.top) / r.height * H);
+    handGraph = { x: gx, y: gy }; }
   // Keep the pointer on screen; while drawing, keep it on the graph, so the pen slides along the
   // border instead of leaving the graph and cutting the line.
   const r = $("board").getBoundingClientRect();
@@ -1004,6 +1056,7 @@ function oneHand(lm, now) {
 let openSince = 0;               // when the fingers opened during a pinch (0 = they're closed)
 let handSeenAt = -Infinity;      // when the main hand was last seen
 function noHands() {
+  handGraph = null;
   mode = "none"; pointer = null; cursor = null; pinching = false; pinchStart = null; fistSince = 0; openSince = 0;
 }
 
@@ -1050,7 +1103,7 @@ function step(allHands, now) {
   const hands = frontHands(allHands, now);                    // drop people in the background, closest first
   const mainHand = pickMainHand(hands, now);
   if (mainHand) { handSeenAt = now; oneHand(mainHand.lm, now); }  // only the main hand points, draws, and clicks
-  else if (pointer && now - handSeenAt < HAND.lostGraceMs) {}     // tracking blink: keep the pen as it was
+  else if (pointer && now - handSeenAt < (penIsDown() ? HAND.lostGraceDrawingMs : HAND.lostGraceMs)) {}   // tracking blink: keep the pen as it was
   else noHands();
   updatePointerUI();
 }
@@ -1074,17 +1127,20 @@ function drawFrame() {           // record the pen and redraw (also used by test
     (($("usePinch").checked && pinching && !!pinchStart?.onCanvas) || spaceHeld);
   if (cursor) {
     const [gx, gy] = toGraph(cursor.x, cursor.y);
-    trace.push({ x: gx, y: gy, drawing });
+    trace.push({ x: gx, y: gy, drawing, hx: handGraph?.x, hy: handGraph?.y, pushed });
     if (trace.length > 5000) {
       trace.shift(); if (strokeStart > 0) strokeStart--;
+      if (pendingSnap) { pendingSnap.start--; if (pendingSnap.start < 0) pendingSnap = null; }
       if (lastStroke) { lastStroke.start--; lastStroke.end--; if (lastStroke.start < 0) lastStroke = null; }
     }
   }
   if (drawing && !wasDrawing) {                                                         // pen down
-    const joined = joinStroke(trace.at(-1));
-    strokeStart = joined >= 0 ? joined : trace.length - 1; wasDrawing = true;
+    let start = resumeStroke(trace.at(-1));                   // same stroke, never snapped
+    if (start < 0) { flushSnap(); start = joinStroke(trace.at(-1)); }   // a new stroke (maybe joining the last)
+    strokeStart = start >= 0 ? start : trace.length - 1; wasDrawing = true;
   }
-  else if (!drawing && wasDrawing) finishStroke();                                     // pen up → snap
+  else if (!drawing && wasDrawing) finishStroke();                                     // pen up → snap soon
+  if (!drawing && pendingSnap && performance.now() - pendingSnap.at > SNAP_WAIT.ms) flushSnap();
   render(drawing);
 }
 
@@ -1097,7 +1153,7 @@ function renderDots() {                  // green = checked this round, yellow =
   }));
 }
 function clearDrawing() {                // same equation, fresh start (also lets you retry after Check)
-  trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1; lastStroke = null;
+  trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1; lastStroke = null; pendingSnap = null;
   $("result").replaceChildren();
 }
 function newEquation() {
@@ -1110,7 +1166,7 @@ function newEquation() {
 }
 function check() {
   if (revealed || !level) return;                       // avoid repeat checks / repeat Claude calls
-  finishStroke();                                       // snap a stroke still in progress
+  finishStroke(); flushSnap();                          // clean up a stroke still in progress
   const r = score(trace, level, parseFloat($("tolerance").value));
   console.log("score", r);
   revealed = true; showResult(r);
