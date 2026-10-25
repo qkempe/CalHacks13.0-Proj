@@ -11,11 +11,12 @@ Your thumb tip is the pen: bring your pointer finger down onto it and hold on th
 
 Hand controls:
 - Quick pinch on a button, checkbox, or dropdown to click it
-- Make a fist for 1 second to clear
+- Make a tight fist and hold it for about 1 second to clear (a ring fills up). Pinching always wins, so curling your fingers while drawing won't clear
+
+Zoom with the − / + buttons in the corner of the graph, or the + and − keys.
 
 If two hands are on screen, the first hand that appeared stays in control of the pen. Another hand can only take over after it has been alone on screen for 2 seconds (a ring fills up while it waits).
 
-**Sticky points:** near a whole or half point like (0, 0), (0, 1) or (0.5, 0), the cursor is pulled toward it. Hold near one for 0.4 seconds (1.2 seconds while drawing, so short pauses mid-line don't lock) and it locks on (a small ring appears). To leave, move about one whole step away (or just a tiny move while drawing, so leaving a point doesn't drag a line). Turn this off with the *Sticky points* setting.
 
 ## How Claude is used
 - The game's code computes every score, slope, and distance. Claude never does the math.
