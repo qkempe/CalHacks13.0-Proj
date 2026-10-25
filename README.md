@@ -13,8 +13,8 @@ Everything fits on one screen: the title top-left, the ⬅ Previous / 🧽 Clear
 
 Hand controls:
 - Quick pinch on a button, checkbox, or dropdown to click it
-- ✌️ Make a peace sign (pointer + middle finger up in a V, the others folded) and hold it for about 0.6 seconds to check (a green ring fills up). Your score pops up on the graph, then after about 4 seconds moves to the panel on the right. Clear, Next or Previous (or ✕) removes it
-- ✊ Make a fist with your thumb tucked in (or along the side) and hold it for about 1 second to clear (a ring fills up). Pinching always wins, so curling your fingers while drawing won't clear. Resting with your thumb up like the pen is not a fist, so pausing between strokes never clears
+- ✌️ Make a peace sign (pointer + middle finger up in a V, the others folded) and hold it for about 0.6 seconds to check (a green ring fills up). Your score pops up on the graph (90 or more: confetti 🎉), then after about 4 seconds moves to the panel on the right. Clear, Next or Previous (or ✕) removes it
+- ✊ Make a fist with your thumb tucked in (or along the side) and hold it for about 1 second to clear (an orange ring fills up). A fist made while drawing only ends the line, it never clears; open your hand first. Pinching always wins, so curling your fingers while drawing won't clear. Resting with your thumb up like the pen is not a fist, so pausing between strokes never clears
 - After a peace-sign check, a fist can't clear until you've opened your hand, so folding your fingers down never wipes your result
 
 Zoom with the − / + buttons in the corner of the graph, or the + and − keys.

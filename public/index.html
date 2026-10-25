@@ -287,7 +287,7 @@ let cursor = null;         // smoothed cursor in pixels
 let pinching = false, spaceHeld = false, revealed = false;
 let wasDrawing = false;    // was the pen down on the previous frame?
 let strokeStart = -1;      // index in `trace` where the current stroke began
-let fistSince = 0, fistUsed = false;   // for "hold a fist to clear"
+let fistSince = 0, fistUsed = false, fistSeenAt = 0;   // for "hold a fist to clear"
 let peaceSince = 0, peaceSeenAt = 0, peaceUsed = false;   // for "hold a peace sign to check"
 let clearLocked = false;   // after a peace-sign check, a fist can't clear until the hand has opened (or pinched)
 let lockToldAt = 0;        // when we last said "open your hand first"
@@ -1220,10 +1220,17 @@ function clickAt(x, y) {
 // 0 → 1 as a confirmed fist is held; 1 = clear.
 const fistProgress = now => Math.min(1, Math.max(0, (now - fistSince - HAND.fistConfirmMs) / HAND.fistMs));
 
+// While a fist is held: the pointer stays put and the ring keeps filling; anything else ends it.
+function fistFrame(lm, now) {
+  if (isClearFist(lm)) fistSeenAt = now;
+  else if (now - fistSeenAt > HAND.gestureGapMs) { mode = "point"; fistSince = 0; fistUsed = false; return; }
+  if (!fistUsed && fistProgress(now) >= 1) { clearDrawing(); fistUsed = true; toast("Cleared 🧽"); }
+}
 const peaceProgress = now => Math.min(1, Math.max(0, (now - peaceSince) / HAND.peaceMs));
 
 function oneHand(lm, now, gap = 0) {
   const ratio = pinchRatio(lm);
+  if (mode === "fist" && !pinching) { fistFrame(lm, now); return; }
   // The hand just came back after the camera lost it: decide right away from what the fingers are doing
   // NOW (no waiting). Still close → the line carries on. Open → the line ends where it was, and the pen
   // does not draw a line across to where the hand is now.
@@ -1251,13 +1258,18 @@ function oneHand(lm, now, gap = 0) {
   }
   // ✊ Fist (thumb tucked in) = clear. A pinch always wins: no fist while pinching, or just after letting
   // go of one, and a fist has to be held steady for fistConfirmMs before it counts.
+  // A fist made WHILE drawing (or right after) only ends the line — it can't go on to clear; open the hand
+  // first. A single blurry frame doesn't restart the ring.
   if (!pinching && !clearLocked && now - pinchEndedAt > HAND.fistAfterPinchMs && isClearFist(lm)) {
-    if (!fistSince) fistSince = now;
+    if (!fistSince) { fistSince = now; fistUsed = false; }
+    fistSeenAt = now;
     if (now - fistSince >= HAND.fistConfirmMs) {
       mode = "fist"; pinchStart = null;
       if (!fistUsed && fistProgress(now) >= 1) { clearDrawing(); fistUsed = true; toast("Cleared 🧽"); }
       return;
     }
+  } else if (fistSince && now - fistSeenAt <= HAND.gestureGapMs && !pinching) {
+    if (mode === "fist") return;                               // keep the ring going through a blurry frame
   } else { fistSince = 0; fistUsed = false; }
   mode = "point";
   const wasPinching = pinching;
@@ -1266,6 +1278,7 @@ function oneHand(lm, now, gap = 0) {
   // a tilted hand can make single fingers look curled, so that is never used here.
   const fist = isClearFist(lm);
   const open = ratio > (pinching && pinchStart && !pinchStart.onCanvas ? HAND.clickOff : HAND.pinchOff) || fist;
+  if (pinching && fist) clearLocked = true;                     // fist while drawing: end the line, never clear
   if (!pinching && ratio < HAND.pinchOn && !fist) { pinching = true; openSince = 0; }
   else if (pinching && open) {                                // only lift the pen once the fingers STAY open
     if (!openSince) openSince = now;
@@ -1298,7 +1311,9 @@ function updatePointerUI() {
     el.className = pinching ? "pinch" : "";
     el.textContent = mode === "fist" ? "✊" : mode === "peace" ? "✌️" : "";
     el.style.background = mode === "peace" && !peaceUsed       // green ring fills while holding a peace sign
-      ? `conic-gradient(var(--green) ${peaceProgress(performance.now()) * 360}deg, #ffffff99 0)` : "";
+      ? `conic-gradient(var(--green) ${peaceProgress(performance.now()) * 360}deg, #ffffff99 0)`
+      : mode === "fist" && !fistUsed                           // orange ring fills while holding a fist
+      ? `conic-gradient(var(--cursor) ${fistProgress(performance.now()) * 360}deg, #ffffff99 0)` : "";
   }
   const target = show && mode === "point" ? clickableAt(pointer.x, pointer.y) : null;
   if (mode === "peace" && !peaceUsed && peaceProgress(performance.now()) < 0.05 && !revealed) toast("✌️ Hold it… checking");
@@ -1422,12 +1437,13 @@ function newEquation(fresh = false) {                         // Next (fresh = s
 function prevEquation() {
   if (seenAt > 0) { seenAt--; showEquation(seen[seenAt]); }
 }
-// ---------- Confetti (score of 75 or more) ----------
-// Skipped if the 🎉 Confetti setting is off, or the computer is set to reduce motion.
-const CONFETTI_SCORE = 75;
+// ---------- Confetti (score of 90 or more) ----------
+// Only the 🎉 Confetti setting turns it off. (It used to also be skipped when the computer's "Reduce
+// motion" accessibility setting was on, which made it look broken.)
+const CONFETTI_SCORE = 90;
 let confettiRun = 0;
 function confetti() {
-  if (!$("celebrate").checked || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (!$("celebrate").checked) return;
   const run = ++confettiRun, cv = $("confetti"), c = cv.getContext("2d"), LIFE = 2500;
   cv.width = innerWidth; cv.height = innerHeight; cv.style.display = "block";
   const colors = ["--red", "--yellow", "--green", "--blue", "--purple"].map(css);
