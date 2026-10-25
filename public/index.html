@@ -97,6 +97,8 @@
   }
   #handPointer.pinch { background:var(--cursor); }
   .hand-hover { outline:5px solid var(--cursor); outline-offset:3px; }
+  /* Confetti covers the page but never blocks clicks (or the hand pointer) */
+  #confetti { position:fixed; inset:0; width:100vw; height:100vh; pointer-events:none; z-index:999; display:none; }
   #toast {
     position:fixed; left:50%; bottom:28px; transform:translateX(-50%); z-index:1001; display:none;   /* bottom: never covers the score */
     font-family:"Fredoka", sans-serif; font-size:1.4rem; font-weight:600; padding:10px 22px;
@@ -203,6 +205,7 @@
       <option value="0.75">🐇 Normal</option>
       <option value="0.4">🚀 Challenge</option>
     </select>
+    <label><input type="checkbox" id="celebrate" checked>🎉 Confetti</label>
     <label><input type="checkbox" id="contrast">High contrast</label>
   </div>
   <div id="status">
@@ -215,6 +218,7 @@
 </main>
 <div id="handPointer"></div>
 <div id="toast" role="status"></div>
+<canvas id="confetti" aria-hidden="true"></canvas>
 
 <script type="module">
 import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
@@ -1418,12 +1422,45 @@ function newEquation(fresh = false) {                         // Next (fresh = s
 function prevEquation() {
   if (seenAt > 0) { seenAt--; showEquation(seen[seenAt]); }
 }
+// ---------- Confetti (score of 75 or more) ----------
+// Skipped if the 🎉 Confetti setting is off, or the computer is set to reduce motion.
+const CONFETTI_SCORE = 75;
+let confettiRun = 0;
+function confetti() {
+  if (!$("celebrate").checked || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const run = ++confettiRun, cv = $("confetti"), c = cv.getContext("2d"), LIFE = 2500;
+  cv.width = innerWidth; cv.height = innerHeight; cv.style.display = "block";
+  const colors = ["--red", "--yellow", "--green", "--blue", "--purple"].map(css);
+  const bits = Array.from({ length: 140 }, () => ({
+    x: innerWidth / 2 + (Math.random() - 0.5) * innerWidth * 0.4, y: innerHeight * 0.4,
+    vx: (Math.random() - 0.5) * 14, vy: -6 - Math.random() * 11,         // burst up and out…
+    size: 7 + Math.random() * 7, rot: Math.random() * 6.3, spin: (Math.random() - 0.5) * 0.3,
+    color: colors[Math.floor(Math.random() * colors.length)],
+  }));
+  const start = performance.now();
+  (function frame(now) {
+    if (run !== confettiRun) return;                                     // a newer burst took over
+    const t = now - start;
+    c.clearRect(0, 0, cv.width, cv.height);
+    for (const b of bits) {
+      b.vy += 0.35; b.vx *= 0.99; b.x += b.vx; b.y += b.vy; b.rot += b.spin;   // …then fall
+      c.save(); c.translate(b.x, b.y); c.rotate(b.rot);
+      c.globalAlpha = Math.max(0, 1 - t / LIFE);                         // fade out
+      c.fillStyle = b.color; c.fillRect(-b.size / 2, -b.size / 4, b.size, b.size / 2);
+      c.restore();
+    }
+    if (t < LIFE) requestAnimationFrame(frame);
+    else { c.clearRect(0, 0, cv.width, cv.height); cv.style.display = "none"; }
+  })(start);
+}
+
 function check() {
   if (revealed || !level) return;                       // avoid repeat checks / repeat Claude calls
   finishStroke(); flushSnap();                          // clean up a stroke still in progress
   const r = score(trace, level, parseFloat($("tolerance").value));
   console.log("score", r);
   revealed = true; showResult(r);
+  if (r.overall >= CONFETTI_SCORE) confetti();
   doneInRound = Math.min(ROUND, doneInRound + 1); renderDots();
 }
 $("clear").onclick = clearDrawing;
