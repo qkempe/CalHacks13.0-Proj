@@ -63,6 +63,15 @@
   #cam, #board { position:absolute; inset:0; width:100%; height:100%; }
   #cam { transform:scaleX(-1); opacity:.18; object-fit:cover; }
 
+  /* Zoom controls float in the bottom-right corner of the graph */
+  .zoom {
+    position:absolute; right:12px; bottom:12px; z-index:2; display:flex; align-items:center; gap:6px;
+    background:var(--card); border:3px solid var(--ink); border-radius:999px; padding:4px 6px;
+  }
+  .zoom button { width:44px; height:44px; padding:0; font-size:1.5rem; border-radius:50%; border-width:3px;
+    background:var(--card); color:var(--ink); box-shadow:0 3px 0 var(--ink); }
+  .zoom button:disabled { opacity:.3; cursor:default; transform:none; }
+  #zoomLabel { font-family:"Fredoka", sans-serif; font-weight:600; min-width:4.2em; text-align:center; }
   #result .breakdown { display:block; font-size:.95rem; font-weight:600; opacity:.75; margin-top:4px; }
 
   /* Hand pointer: follows your index finger anywhere on the page */
@@ -127,6 +136,11 @@
   <div id="stage">
     <video id="cam" autoplay playsinline muted></video>
     <canvas id="board" width="800" height="600"></canvas>
+    <div class="zoom">
+      <button id="zoomOut" aria-label="Zoom out">−</button>
+      <span id="zoomLabel">Normal</span>
+      <button id="zoomIn" aria-label="Zoom in">+</button>
+    </div>
   </div>
   <div id="result" aria-live="polite"></div>
   <div id="status">
@@ -147,7 +161,6 @@
       <option value="0.4">🚀 Challenge</option>
     </select>
     <label><input type="checkbox" id="snap" checked>Snap to clean shape</label>
-    <label><input type="checkbox" id="sticky" checked>Sticky points</label>
     <label><input type="checkbox" id="contrast">High contrast</label>
   </div>
 </main>
@@ -161,15 +174,30 @@ const $ = id => document.getElementById(id);
 const ctx = $("board").getContext("2d");
 const css = name => getComputedStyle(document.body).getPropertyValue(name).trim();
 
-// ---------- View ----------
-// The canvas is 800×600 pixels and always shows −5 … 5 on both axes, numbered every 1.
-const W = 800, H = 600, XMIN = -5, XMAX = 5, YMIN = -5, YMAX = 5, STEP = 1;
+// ---------- View & zoom ----------
+// The canvas is always 800×600 pixels; zoom (the − / + buttons or keys) changes how many graph units fit on it.
+// The drawing is saved in graph units, so it stays in the right place when you zoom.
+const W = 800, H = 600;
+const ZOOMS = [
+  { name: "Close",  half: 3.5, step: 1 },   // shows −3.5 … 3.5
+  { name: "Normal", half: 5,   step: 1 },   // shows −5 … 5
+  { name: "Far",    half: 8,   step: 2 },   // shows −8 … 8, numbers every 2
+];
+let zoomIdx = 1, XMIN, XMAX, YMIN, YMAX, STEP;
+function setZoom(i) {
+  zoomIdx = Math.max(0, Math.min(ZOOMS.length - 1, i));
+  const z = ZOOMS[zoomIdx];
+  XMIN = YMIN = -z.half; XMAX = YMAX = z.half; STEP = z.step;
+  $("zoomLabel").textContent = z.name;
+  $("zoomIn").disabled = zoomIdx === 0;
+  $("zoomOut").disabled = zoomIdx === ZOOMS.length - 1;
+}
 const toPx = (x, y) => [(x - XMIN) / (XMAX - XMIN) * W, H - (y - YMIN) / (YMAX - YMIN) * H];
 const toGraph = (px, py) => [XMIN + px / W * (XMAX - XMIN), YMIN + (H - py) / H * (YMAX - YMIN)];
 
 // ---------- Random equations ----------
 // Every equation is a list of pieces, so piecewise functions can be added later.
-// Values are kept small so the interesting part of the graph is on screen.
+// Values are kept small so the whole graph is visible even at "Close" zoom.
 const randInt = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1));
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 const coefText = m => ({ "1": "", "-1": "−", "0.5": "½", "-0.5": "−½" }[String(m)] ?? `${m < 0 ? "−" : ""}${Math.abs(m)}`);
@@ -207,6 +235,7 @@ let pinching = false, spaceHeld = false, revealed = false;
 let wasDrawing = false;    // was the pen down on the previous frame?
 let strokeStart = -1;      // index in `trace` where the current stroke began
 let fistSince = 0, fistUsed = false;   // for "hold a fist to clear"
+let pinchEndedAt = -Infinity;          // when the last pinch was released
 let feedbackId = 0;
 const ROUND = 5;           // progress dots: equations checked in this round of 5
 let doneInRound = 0;
@@ -354,7 +383,7 @@ const MESSAGES = {
   off_target: "Good try! Your drawing is a bit away from the graph. Check where it crosses the y-axis.",
   incomplete: "Nice start! Try drawing across more of the graph.",
   missing_piece: "I didn't see a drawing yet. Pinch (or hold space) and trace the graph.",
-  off_screen: "The graph is off the screen. Press Next for a new one.",
+  off_screen: "The graph is off the screen. Try zooming out with the − button.",
 };
 const pct = v => `${Math.round(v * 100)}%`;
 async function showResult(r) {
@@ -469,14 +498,10 @@ function drawCursor(drawing) {
   drawing ? ctx.fill() : ctx.stroke();
   ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 3.5, 0, Math.PI * 2);   // center dot: exactly where the pen is
   ctx.fillStyle = css("--ink"); ctx.fill();
-  if (stuck) {                                                // locked onto a point: small ring around it
-    ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 8, 0, Math.PI * 2);
-    ctx.lineWidth = 2.5; ctx.strokeStyle = css("--ink"); ctx.stroke();
-  }
-  if (fistSince && !fistUsed) {                               // ring fills up while holding a fist
-    const t = Math.min(1, (performance.now() - fistSince) / 1000);
+  if (mode === "fist" && !fistUsed) {                         // ring fills up while holding a fist
+    const t = fistProgress(performance.now());
     ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 28, -Math.PI / 2, -Math.PI / 2 + t * 2 * Math.PI);
-    ctx.lineWidth = 6; ctx.stroke();
+    ctx.lineWidth = 6; ctx.strokeStyle = css("--cursor"); ctx.stroke();
   }
 }
 function drawTakeover() {                                     // ring fills while a new hand waits to take control
@@ -507,13 +532,20 @@ const HAND = {
   edge: 0.12,               // ignore this much of each camera edge, so you can reach every corner of the page
   pinchOn: 0.3, pinchOff: 0.45,   // pinch closes below / opens above this (thumb–index gap ÷ hand size)
   tapMs: 600, tapMovePx: 50,      // a "click" = pinch released within 600 ms, moving less than 50 px
-  fistMs: 1000,                   // hold a fist this long to clear
+  fistMs: 1000,                   // hold a fist this long to clear (after it's confirmed)
+  fistConfirmMs: 300,             // a fist must be seen this long before it counts (filters quick blips)
+  fistAfterPinchMs: 600,          // no fist for this long after a pinch ends (hands curl as they relax)
+  fistCurl: 1.1,                  // fingertip must be within this × the knuckle's distance from the wrist
 };
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 // A finger is "extended" when its tip is farther from the wrist than its middle joint.
 const extended = (lm, tip, joint) => dist(lm[tip], lm[0]) > dist(lm[joint], lm[0]);
-const isFist = lm => [[8, 6], [12, 10], [16, 14], [20, 18]].every(([t, j]) => !extended(lm, t, j));
+// "Curled" = fingertip pulled right down to its knuckle (about as close to the wrist as the knuckle).
+// The pointer finger tells a pinch from a fist: in a pinch it reaches out to the thumb, in a fist
+// it's curled. So a curled pointer finger is never a pinch, and a fist needs all four curled.
+const curled = (lm, tip, knuckle) => dist(lm[tip], lm[0]) < HAND.fistCurl * dist(lm[knuckle], lm[0]);
+const isFist = lm => [[8, 5], [12, 9], [16, 13], [20, 17]].every(([tip, knuckle]) => curled(lm, tip, knuckle));
 const pinchRatio = lm => dist(lm[4], lm[8]) / dist(lm[0], lm[9]);   // thumb–index gap relative to hand size
 
 // ----- Main hand: who controls the pen (from the teammate's version) -----
@@ -576,47 +608,9 @@ function movePointer(tip) {
   pointer = pointer ? { x: pointer.x + a * (raw.x - pointer.x), y: pointer.y + a * (raw.y - pointer.y) } : raw;
   const r = $("board").getBoundingClientRect();
   const under = document.elementFromPoint(pointer.x, pointer.y);
-  cursor = stickyCursor(under === $("board")
+  cursor = under === $("board")
     ? { x: (pointer.x - r.left) / r.width * W, y: (pointer.y - r.top) / r.height * H }
-    : null, performance.now());                              // null = not over the graph (e.g. over a button)
-}
-
-// ----- Sticky points: steadier aim on whole and half points like (0, 0), (0, 1), (0.5, 0) -----
-// Near a point the cursor is pulled toward it (so hand shake moves it less). Stay near the same
-// point for STICK.dwellMs (longer, STICK.dwellDrawMs, while drawing) and it locks on.
-// To leave, the hand has to move STICK.release graph units away, about one whole step,
-// e.g. from (0, 0) out toward (0, 1), but only STICK.releaseDraw while drawing.
-const STICK = {
-  grid: 0.5,        // points every half unit
-  near: 0.2,        // within this many graph units, the pull starts
-  pull: 0.6,        // how strongly it pulls at the very center (0 = none, 1 = jump right onto it)
-  dwellMs: 400,     // stay near one point this long to lock on
-  dwellDrawMs: 1200, // …or this long while pinching/drawing, so a brief pause mid-line doesn't lock
-  release: 0.9,     // move this far (graph units) from a locked point to break free
-  releaseDraw: 0.1, // …much less while pinching/drawing, so leaving a point doesn't drag a long line
-};
-let stuck = null;                // {x, y} graph point the cursor is locked to
-let nearPt = null, nearSince = 0;
-let leftPt = null;               // point just broken free from: no pull/lock until you're out of its range
-
-function stickyCursor(c, now) {  // c: cursor from the hand (canvas pixels) → cursor to use
-  if (!c || !$("sticky").checked) { stuck = nearPt = leftPt = null; return c; }
-  const [gx, gy] = toGraph(c.x, c.y);
-  const at = p => { const [x, y] = toPx(p.x, p.y); return { x, y }; };
-  const pen = pinching || spaceHeld;                          // drawing (or about to)
-  if (stuck) {
-    if (Math.hypot(gx - stuck.x, gy - stuck.y) < (pen ? STICK.releaseDraw : STICK.release)) return at(stuck);
-    leftPt = stuck; stuck = nearPt = null;                    // moved far enough: free again
-  }
-  if (leftPt && Math.hypot(gx - leftPt.x, gy - leftPt.y) >= STICK.near) leftPt = null;
-  const pt = { x: Math.round(gx / STICK.grid) * STICK.grid, y: Math.round(gy / STICK.grid) * STICK.grid };
-  const d = Math.hypot(gx - pt.x, gy - pt.y);
-  const justLeft = leftPt && leftPt.x === pt.x && leftPt.y === pt.y;
-  if (d >= STICK.near || justLeft) { nearPt = null; return c; }
-  if (!nearPt || nearPt.x !== pt.x || nearPt.y !== pt.y) { nearPt = pt; nearSince = now; }
-  if (now - nearSince >= (pen ? STICK.dwellDrawMs : STICK.dwellMs)) { stuck = pt; return at(pt); }
-  const k = STICK.pull * (1 - d / STICK.near);                // stronger pull the closer you are
-  return at({ x: gx + (pt.x - gx) * k, y: gy + (pt.y - gy) * k });
+    : null;                                                  // not over the graph (e.g. over a button)
 }
 
 // Click whatever is under a point: buttons, checkboxes (via their label), and dropdowns.
@@ -635,21 +629,28 @@ function clickAt(x, y) {
   }
 }
 
+// 0 → 1 as a confirmed fist is held; 1 = clear.
+const fistProgress = now => Math.min(1, Math.max(0, (now - fistSince - HAND.fistConfirmMs) / HAND.fistMs));
+
 function oneHand(lm, now) {
   movePointer(lm[4]);                                         // thumb tip = pen and pointer
-  if (isFist(lm)) {                                           // ✊ fist: never draw; hold to clear
-    mode = "fist"; pinching = false; pinchStart = null;
+  // ✊ Fist = clear. A pinch always wins: no fist while pinching, or just after letting go of one,
+  // and a fist has to be held steady for fistConfirmMs before it counts.
+  if (!pinching && now - pinchEndedAt > HAND.fistAfterPinchMs && isFist(lm)) {
     if (!fistSince) fistSince = now;
-    if (!fistUsed && now - fistSince > HAND.fistMs) { clearDrawing(); fistUsed = true; toast("Cleared 🧽"); }
-    return;
-  }
-  fistSince = 0; fistUsed = false;
+    if (now - fistSince >= HAND.fistConfirmMs) {
+      mode = "fist"; pinchStart = null;
+      if (!fistUsed && fistProgress(now) >= 1) { clearDrawing(); fistUsed = true; toast("Cleared 🧽"); }
+      return;
+    }
+  } else { fistSince = 0; fistUsed = false; }
   mode = "point";
   const wasPinching = pinching;
-  const ratio = pinchRatio(lm);
-  if (!pinching && ratio < HAND.pinchOn) pinching = true;
-  else if (pinching && ratio > HAND.pinchOff) pinching = false;
+  const ratio = pinchRatio(lm), pointerCurled = curled(lm, 8, 5);   // thumb on a curled finger = fist, not pinch
+  if (!pinching && ratio < HAND.pinchOn && !pointerCurled) pinching = true;
+  else if (pinching && (ratio > HAND.pinchOff || pointerCurled)) pinching = false;
   if (pinching && !wasPinching) pinchStart = { t: now, x: pointer.x, y: pointer.y, onCanvas: !!cursor };
+  if (!pinching && wasPinching) pinchEndedAt = now;
   if (!pinching && wasPinching && pinchStart) {               // pinch released: was it a quick tap?
     const quick = now - pinchStart.t < HAND.tapMs && dist(pointer, pinchStart) < HAND.tapMovePx;
     if (quick && !pinchStart.onCanvas) clickAt(pinchStart.x, pinchStart.y);
@@ -763,6 +764,8 @@ $("clear").onclick = clearDrawing;
 $("next").onclick = newEquation;
 $("kind").onchange = newEquation;
 $("check").onclick = check;
+$("zoomIn").onclick = () => setZoom(zoomIdx - 1);
+$("zoomOut").onclick = () => setZoom(zoomIdx + 1);
 $("contrast").onchange = e => document.body.classList.toggle("contrast", e.target.checked);
 addEventListener("keydown", e => {
   if (e.target.tagName === "SELECT") return;
@@ -770,9 +773,12 @@ addEventListener("keydown", e => {
   if (e.code === "Enter") check();
   if (e.code === "KeyC" || e.code === "Backspace") clearDrawing();
   if (e.code === "KeyN") newEquation();
+  if (e.code === "Equal" || e.code === "NumpadAdd") setZoom(zoomIdx - 1);
+  if (e.code === "Minus" || e.code === "NumpadSubtract") setZoom(zoomIdx + 1);
 });
 addEventListener("keyup", e => { if (e.code === "Space") spaceHeld = false; });
 
+setZoom(1);
 start().catch(err => { $("eq").textContent = "Camera error"; $("status").textContent = err.message; });
 </script>
 </body>
