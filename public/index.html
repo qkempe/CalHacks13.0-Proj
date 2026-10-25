@@ -63,15 +63,6 @@
   #cam, #board { position:absolute; inset:0; width:100%; height:100%; }
   #cam { transform:scaleX(-1); opacity:.18; object-fit:cover; }
 
-  /* Zoom controls float in the bottom-right corner of the graph */
-  .zoom {
-    position:absolute; right:12px; bottom:12px; z-index:2; display:flex; align-items:center; gap:6px;
-    background:var(--card); border:3px solid var(--ink); border-radius:999px; padding:4px 6px;
-  }
-  .zoom button { width:44px; height:44px; padding:0; font-size:1.5rem; border-radius:50%; border-width:3px;
-    background:var(--card); color:var(--ink); box-shadow:0 3px 0 var(--ink); }
-  .zoom button:disabled { opacity:.3; cursor:default; transform:none; }
-  #zoomLabel { font-family:"Fredoka", sans-serif; font-weight:600; min-width:4.2em; text-align:center; }
   #result .breakdown { display:block; font-size:.95rem; font-weight:600; opacity:.75; margin-top:4px; }
 
   /* Hand pointer: follows your index finger anywhere on the page */
@@ -136,18 +127,12 @@
   <div id="stage">
     <video id="cam" autoplay playsinline muted></video>
     <canvas id="board" width="800" height="600"></canvas>
-    <div class="zoom">
-      <button id="zoomOut" aria-label="Zoom out">−</button>
-      <span id="zoomLabel">Normal</span>
-      <button id="zoomIn" aria-label="Zoom in">+</button>
-    </div>
   </div>
   <div id="result" aria-live="polite"></div>
   <div id="status">
     <b>👍 Your thumb is the pen:</b> tap your pointer finger onto it and hold on the graph to draw ·
     <b>👌 Quick pinch</b> on a button to click ·
-    <b>✌️ Two fingers</b> + move to scroll · <b>✊ Fist</b> for 1 second to clear ·
-    <b>🤲 Hands together</b> to zoom in · <b>👐 Push hands apart</b> to zoom out
+    <b>✊ Fist</b> for 1 second to clear
   </div>
   <div class="settings">
     <select id="kind" aria-label="Kind of equations">
@@ -176,30 +161,15 @@ const $ = id => document.getElementById(id);
 const ctx = $("board").getContext("2d");
 const css = name => getComputedStyle(document.body).getPropertyValue(name).trim();
 
-// ---------- View & zoom ----------
-// The canvas is always 800×600 pixels; zoom changes how many graph units fit on it.
-// The drawing is saved in graph units, so it stays in the right place when you zoom.
-const W = 800, H = 600;
-const ZOOMS = [
-  { name: "Close",  half: 3.5, step: 1 },   // shows −3.5 … 3.5
-  { name: "Normal", half: 5,   step: 1 },   // shows −5 … 5
-  { name: "Far",    half: 8,   step: 2 },   // shows −8 … 8, numbers every 2
-];
-let zoomIdx = 1, XMIN, XMAX, YMIN, YMAX, STEP;
-function setZoom(i) {
-  zoomIdx = Math.max(0, Math.min(ZOOMS.length - 1, i));
-  const z = ZOOMS[zoomIdx];
-  XMIN = YMIN = -z.half; XMAX = YMAX = z.half; STEP = z.step;
-  $("zoomLabel").textContent = z.name;
-  $("zoomIn").disabled = zoomIdx === 0;
-  $("zoomOut").disabled = zoomIdx === ZOOMS.length - 1;
-}
+// ---------- View ----------
+// The canvas is 800×600 pixels and always shows −5 … 5 on both axes, numbered every 1.
+const W = 800, H = 600, XMIN = -5, XMAX = 5, YMIN = -5, YMAX = 5, STEP = 1;
 const toPx = (x, y) => [(x - XMIN) / (XMAX - XMIN) * W, H - (y - YMIN) / (YMAX - YMIN) * H];
 const toGraph = (px, py) => [XMIN + px / W * (XMAX - XMIN), YMIN + (H - py) / H * (YMAX - YMIN)];
 
 // ---------- Random equations ----------
 // Every equation is a list of pieces, so piecewise functions can be added later.
-// Values are kept small so the whole graph is visible even at "Close" zoom.
+// Values are kept small so the interesting part of the graph is on screen.
 const randInt = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1));
 const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 const coefText = m => ({ "1": "", "-1": "−", "0.5": "½", "-0.5": "−½" }[String(m)] ?? `${m < 0 ? "−" : ""}${Math.abs(m)}`);
@@ -384,7 +354,7 @@ const MESSAGES = {
   off_target: "Good try! Your drawing is a bit away from the graph. Check where it crosses the y-axis.",
   incomplete: "Nice start! Try drawing across more of the graph.",
   missing_piece: "I didn't see a drawing yet. Pinch (or hold space) and trace the graph.",
-  off_screen: "The graph is off the screen. Try zooming out with the − button.",
+  off_screen: "The graph is off the screen. Press Next for a new one.",
 };
 const pct = v => `${Math.round(v * 100)}%`;
 async function showResult(r) {
@@ -527,10 +497,9 @@ function render(drawing = false) {
 // The MAIN hand's thumb tip is a pointer for the whole page (the thumb stays still while the
 // pointer finger comes down to pinch, so lines are steadier):
 //   pinch & hold on the graph = draw · quick pinch on a button = click ·
-//   two fingers up (✌️) + move = scroll · fist for 1 second = clear
+//   fist for 1 second = clear
 // The first hand seen is the main hand. Another hand is ignored for drawing; it only takes over
 // after being alone on screen for 2 seconds (a ring fills while it waits).
-// Two OPEN hands on purpose → zoom: hold them together = zoom in · push them apart quickly = zoom out
 //
 // Tuning knobs (test these on a real webcam and adjust):
 const HAND = {
@@ -538,26 +507,14 @@ const HAND = {
   edge: 0.12,               // ignore this much of each camera edge, so you can reach every corner of the page
   pinchOn: 0.3, pinchOff: 0.45,   // pinch closes below / opens above this (thumb–index gap ÷ hand size)
   tapMs: 600, tapMovePx: 50,      // a "click" = pinch released within 600 ms, moving less than 50 px
-  scrollSpeed: 2.2,               // page pixels scrolled per pixel of hand movement
   fistMs: 1000,                   // hold a fist this long to clear
-  together: 1.6,            // hands closer than 1.6 palm-widths count as "together"
-  near: 2.6, far: 4.0,      // zoom out = hands go from closer than `near` to farther than `far`…
-  pushMs: 700,              // …within this many milliseconds
-  holdMs: 500,              // hold hands together this long to zoom in
 };
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const px = p => ({ x: p.x * 640, y: p.y * 480 });            // camera coords → camera pixels (true proportions)
 // A finger is "extended" when its tip is farther from the wrist than its middle joint.
 const extended = (lm, tip, joint) => dist(lm[tip], lm[0]) > dist(lm[joint], lm[0]);
 const isFist = lm => [[8, 6], [12, 10], [16, 14], [20, 18]].every(([t, j]) => !extended(lm, t, j));
-const isTwoFingers = lm => extended(lm, 8, 6) && extended(lm, 12, 10) && !extended(lm, 16, 14) && !extended(lm, 20, 18);
-const palmWidth = lm => dist(px(lm[5]), px(lm[17]));         // knuckle of index → knuckle of pinky
 const pinchRatio = lm => dist(lm[4], lm[8]) / dist(lm[0], lm[9]);   // thumb–index gap relative to hand size
-// An open palm = all four fingers out and not pinching. Only two open palms count as a zoom gesture,
-// so a second hand that wanders in while you draw doesn't interrupt you.
-const isOpenPalm = lm => [[8, 6], [12, 10], [16, 14], [20, 18]].every(([t, j]) => extended(lm, t, j))
-  && pinchRatio(lm) > HAND.pinchOff;
 
 // ----- Main hand: who controls the pen (from the teammate's version) -----
 // MediaPipe doesn't say which hand is which from frame to frame, so we follow the main hand
@@ -591,20 +548,14 @@ function pickMainHand(hands, now) {          // hands: [{ lm, side }] → the ma
 
 let landmarker, lastVideoTime = -1;
 let pointer = null;              // smoothed pointer position on the page (viewport pixels)
-let mode = "none";               // "point" | "scroll" | "fist" | "two" | "none"
+let mode = "none";               // "point" | "fist" | "none"
 let pinchStart = null;           // where/when the current pinch began: {t, x, y, onCanvas}
-let scrollLastY = null;
 let hoverEl = null;
-let twoHist = [], togetherSince = 0, zoomInDone = false, blockOutUntilFar = false, zoomCooldownUntil = 0;
 
 let toastTimer;
 function toast(msg) {
   const t = $("toast"); t.textContent = msg; t.style.display = "block";
   clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.style.display = "none"), 1200);
-}
-function zoomBy(dir, msg) {
-  const before = zoomIdx; setZoom(zoomIdx + dir);
-  toast(zoomIdx !== before ? msg : dir < 0 ? "Already zoomed in all the way" : "Already zoomed out all the way");
 }
 
 // Camera point → page position (mirrored, like a mirror), and → graph position if it's over the graph.
@@ -693,13 +644,7 @@ function oneHand(lm, now) {
     return;
   }
   fistSince = 0; fistUsed = false;
-  if (isTwoFingers(lm)) {                                     // ✌️ scroll: move hand up = page moves up
-    mode = "scroll"; pinching = false; pinchStart = null;
-    if (scrollLastY !== null) window.scrollBy(0, (scrollLastY - pointer.y) * HAND.scrollSpeed);
-    scrollLastY = pointer.y;
-    return;
-  }
-  mode = "point"; scrollLastY = null;
+  mode = "point";
   const wasPinching = pinching;
   const ratio = pinchRatio(lm);
   if (!pinching && ratio < HAND.pinchOn) pinching = true;
@@ -712,39 +657,8 @@ function oneHand(lm, now) {
   }
 }
 
-function twoHands(a, b, now) {
-  mode = "two"; pointer = null; cursor = null; pinching = false; pinchStart = null; scrollLastY = null;
-  const d = dist(px(a[9]), px(b[9])) / ((palmWidth(a) + palmWidth(b)) / 2);   // distance in palm-widths
-  twoHist.push({ t: now, d });
-  twoHist = twoHist.filter(h => now - h.t < HAND.pushMs);
-
-  // 🤲 Zoom in: hands held together
-  if (d < HAND.together) {
-    if (!togetherSince) togetherSince = now;
-    if (!zoomInDone && now - togetherSince > HAND.holdMs) {
-      zoomBy(-1, "Zoom in 🔍"); zoomInDone = true;
-      blockOutUntilFar = true;                    // pulling apart afterwards shouldn't also zoom out
-    }
-  } else {
-    togetherSince = 0;
-    if (d > HAND.near) zoomInDone = false;
-  }
-  if (blockOutUntilFar) {
-    if (d > HAND.far) { blockOutUntilFar = false; twoHist = []; }
-    return;
-  }
-  // 👐 Zoom out: hands were close moments ago, and are now far apart
-  const closest = Math.min(...twoHist.map(h => h.d));
-  if (now > zoomCooldownUntil && closest < HAND.near && d > HAND.far) {
-    zoomBy(+1, "Zoom out 🔭"); zoomCooldownUntil = now + 1000; twoHist = [];
-  }
-}
-
-function resetTwoHands() {
-  twoHist = []; togetherSince = 0; zoomInDone = false; blockOutUntilFar = false;
-}
 function noHands() {
-  mode = "none"; pointer = null; cursor = null; pinching = false; pinchStart = null; fistSince = 0; scrollLastY = null;
+  mode = "none"; pointer = null; cursor = null; pinching = false; pinchStart = null; fistSince = 0;
 }
 
 // Show the page pointer (hidden over the graph, where the graph's own cursor shows) and highlight what it would click.
@@ -755,7 +669,7 @@ function updatePointerUI() {
   if (show) {
     el.style.transform = `translate(${pointer.x}px, ${pointer.y}px)`;
     el.className = pinching ? "pinch" : "";
-    el.textContent = mode === "scroll" ? "✌️" : mode === "fist" ? "✊" : "";
+    el.textContent = mode === "fist" ? "✊" : "";
   }
   const target = show && mode === "point" ? clickableAt(pointer.x, pointer.y) : null;
   if (target !== hoverEl) {
@@ -784,14 +698,9 @@ async function start() {
 
 // One frame of hand input (also used by tests). hands = [{ lm, side }]
 function step(hands, now) {
-  const mainHand = pickMainHand(hands, now);                  // always runs, so the main hand stays tracked
-  if (hands.length >= 2 && isOpenPalm(hands[0].lm) && isOpenPalm(hands[1].lm)) {
-    twoHands(hands[0].lm, hands[1].lm, now);                  // two open palms on purpose → zoom gestures
-  } else {
-    resetTwoHands();
-    if (mainHand) oneHand(mainHand.lm, now);                  // only the main hand points, draws, and clicks
-    else noHands();
-  }
+  const mainHand = pickMainHand(hands, now);
+  if (mainHand) oneHand(mainHand.lm, now);                    // only the main hand points, draws, and clicks
+  else noHands();
   updatePointerUI();
 }
 
@@ -854,8 +763,6 @@ $("clear").onclick = clearDrawing;
 $("next").onclick = newEquation;
 $("kind").onchange = newEquation;
 $("check").onclick = check;
-$("zoomIn").onclick = () => setZoom(zoomIdx - 1);
-$("zoomOut").onclick = () => setZoom(zoomIdx + 1);
 $("contrast").onchange = e => document.body.classList.toggle("contrast", e.target.checked);
 addEventListener("keydown", e => {
   if (e.target.tagName === "SELECT") return;
@@ -863,12 +770,9 @@ addEventListener("keydown", e => {
   if (e.code === "Enter") check();
   if (e.code === "KeyC" || e.code === "Backspace") clearDrawing();
   if (e.code === "KeyN") newEquation();
-  if (e.code === "Equal" || e.code === "NumpadAdd") setZoom(zoomIdx - 1);
-  if (e.code === "Minus" || e.code === "NumpadSubtract") setZoom(zoomIdx + 1);
 });
 addEventListener("keyup", e => { if (e.code === "Space") spaceHeld = false; });
 
-setZoom(1);
 start().catch(err => { $("eq").textContent = "Camera error"; $("status").textContent = err.message; });
 </script>
 </body>

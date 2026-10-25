@@ -11,9 +11,7 @@ Your thumb tip is the pen: bring your pointer finger down onto it and hold on th
 
 Hand controls:
 - Quick pinch on a button, checkbox, or dropdown to click it
-- Two fingers up (✌️) and move your hand to scroll
 - Make a fist for 1 second to clear
-- Two open hands held together to zoom in; push them apart quickly to zoom out
 
 If two hands are on screen, the first hand that appeared stays in control of the pen. Another hand can only take over after it has been alone on screen for 2 seconds (a ring fills up while it waits).
 
