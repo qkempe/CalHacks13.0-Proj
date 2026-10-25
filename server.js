@@ -29,18 +29,22 @@ Rules:
 
 What the fields mean (for each piece of the graph):
 - mistake "wrong_direction": the trace slopes the opposite way from the real graph (compare signs of userSlope and trueSlope).
-- mistake "off_target": the shape is close but shifted. avgOffset > 0 means drawn too high; avgOffset < 0 means too low.
-- mistake "incomplete": only part of the graph was drawn. coverage is the fraction covered (1 = all of it).
+- mistake "too_much": the student drew lots of extra lines or scribbles. Encourage one calm, careful trace.
+- mistake "off_target": much of the drawing is away from the graph. avgOffset > 0 means drawn too high; avgOffset < 0 means too low.
+- mistake "incomplete": only part of the graph was traced closely.
 - mistake null: no major mistake.
+- precision: share of the drawing that is close to the graph (1 = all of it).
+- coverage: share of the graph that was traced closely (1 = all of it).
+- inkRatio: how much they drew compared with the graph's length (about 1 is ideal; above 1.5 costs points).
 - avgErr: average distance from the real graph, in grid squares. Smaller is better.
-- score: 0 to 100.`;
+- score: 0 to 100. It is high only when the drawing is both close to the graph and covers it, without extra lines.`;
 
 // Only pass along the fields we expect, so nothing unexpected reaches Claude.
 function cleanAttempt(body) {
   const { equation, overall, pieces } = body ?? {};
   if (typeof equation !== "string" || !Array.isArray(pieces) || pieces.length === 0) return null;
   const num = v => (v !== null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : null);
-  const MISTAKES = ["wrong_direction", "off_target", "incomplete", "missing_piece"];
+  const MISTAKES = ["wrong_direction", "too_much", "off_target", "incomplete", "missing_piece", "off_screen"];
   return {
     equation: equation.slice(0, 40),
     overall: num(overall),
@@ -49,6 +53,7 @@ function cleanAttempt(body) {
       mistake: MISTAKES.includes(p?.mistake) ? p.mistake : null,
       userSlope: num(p?.userSlope), trueSlope: num(p?.trueSlope),
       avgErr: num(p?.avgErr), avgOffset: num(p?.avgOffset), coverage: num(p?.coverage),
+      precision: num(p?.precision), inkRatio: num(p?.inkRatio),
     })),
   };
 }

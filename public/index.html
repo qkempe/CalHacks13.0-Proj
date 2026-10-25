@@ -63,6 +63,17 @@
   #cam, #board { position:absolute; inset:0; width:100%; height:100%; }
   #cam { transform:scaleX(-1); opacity:.18; object-fit:cover; }
 
+  /* Zoom controls float in the bottom-right corner of the graph */
+  .zoom {
+    position:absolute; right:12px; bottom:12px; z-index:2; display:flex; align-items:center; gap:6px;
+    background:var(--card); border:3px solid var(--ink); border-radius:999px; padding:4px 6px;
+  }
+  .zoom button { width:44px; height:44px; padding:0; font-size:1.5rem; border-radius:50%; border-width:3px;
+    background:var(--card); color:var(--ink); box-shadow:0 3px 0 var(--ink); }
+  .zoom button:disabled { opacity:.3; cursor:default; transform:none; }
+  #zoomLabel { font-family:"Fredoka", sans-serif; font-weight:600; min-width:4.2em; text-align:center; }
+  #result .breakdown { display:block; font-size:.95rem; font-weight:600; opacity:.75; margin-top:4px; }
+
   #result {
     position:relative; display:flex; align-items:center; gap:14px; margin:26px 0 8px; padding:14px 20px;
     background:var(--card); border:4px solid var(--ink); border-radius:22px; font-size:1.3rem; font-weight:800;
@@ -110,10 +121,20 @@
   <div id="stage">
     <video id="cam" autoplay playsinline muted></video>
     <canvas id="board" width="800" height="600"></canvas>
+    <div class="zoom">
+      <button id="zoomOut" aria-label="Zoom out">−</button>
+      <span id="zoomLabel">Normal</span>
+      <button id="zoomIn" aria-label="Zoom in">+</button>
+    </div>
   </div>
   <div id="result" aria-live="polite"></div>
-  <div id="status">👌 Pinch thumb + pointer finger (or hold SPACE) to draw. Press ENTER to check.</div>
+  <div id="status">👌 Pinch thumb + pointer finger (or hold SPACE) to draw · ✊ Hold a fist for 1 second (or press C) to clear · ENTER to check</div>
   <div class="settings">
+    <select id="kind" aria-label="Kind of equations">
+      <option value="mix">📈 Lines + curves</option>
+      <option value="line">📏 Lines only</option>
+      <option value="curve">🌈 Curves only</option>
+    </select>
     <label><input type="checkbox" id="usePinch" checked>Pinch to draw</label>
     <select id="tolerance" aria-label="Difficulty">
       <option value="1.5">🐢 Forgiving</option>
@@ -128,29 +149,74 @@
 <script type="module">
 import { HandLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
-// ---------- Graph setup ----------
-const W = 800, H = 600, XMIN = -5, XMAX = 5, YMIN = -5, YMAX = 5;
+const $ = id => document.getElementById(id);
+const ctx = $("board").getContext("2d");
+const css = name => getComputedStyle(document.body).getPropertyValue(name).trim();
+
+// ---------- View & zoom ----------
+// The canvas is always 800×600 pixels; zoom changes how many graph units fit on it.
+// The drawing is saved in graph units, so it stays in the right place when you zoom.
+const W = 800, H = 600;
+const ZOOMS = [
+  { name: "Close",  half: 3.5, step: 1 },   // shows −3.5 … 3.5
+  { name: "Normal", half: 5,   step: 1 },   // shows −5 … 5
+  { name: "Far",    half: 8,   step: 2 },   // shows −8 … 8, numbers every 2
+];
+let zoomIdx = 1, XMIN, XMAX, YMIN, YMAX, STEP;
+function setZoom(i) {
+  zoomIdx = Math.max(0, Math.min(ZOOMS.length - 1, i));
+  const z = ZOOMS[zoomIdx];
+  XMIN = YMIN = -z.half; XMAX = YMAX = z.half; STEP = z.step;
+  $("zoomLabel").textContent = z.name;
+  $("zoomIn").disabled = zoomIdx === 0;
+  $("zoomOut").disabled = zoomIdx === ZOOMS.length - 1;
+}
 const toPx = (x, y) => [(x - XMIN) / (XMAX - XMIN) * W, H - (y - YMIN) / (YMAX - YMIN) * H];
 const toGraph = (px, py) => [XMIN + px / W * (XMAX - XMIN), YMIN + (H - py) / H * (YMAX - YMIN)];
 
-// ---------- Levels (Person B owns this) ----------
-// Each level is a list of pieces, so piecewise functions can be added later without changing scoring.
-// `snap` = which clean shape a finished stroke straightens into: "line" or "curve" (a parabola).
-const LEVELS = [
-  { label: "y = 2x + 1",  snap: "line",  pieces: [{ f: x => 2 * x + 1, xmin: -5, xmax: 5 }] },
-  { label: "y = −x + 3",  snap: "line",  pieces: [{ f: x => -x + 3,    xmin: -5, xmax: 5 }] },
-  { label: "y = 3",       snap: "line",  pieces: [{ f: x => 3,         xmin: -5, xmax: 5 }] },
-  { label: "y = ½x − 2",  snap: "line",  pieces: [{ f: x => 0.5 * x - 2, xmin: -5, xmax: 5 }] },
-  { label: "y = x² − 3",  snap: "curve", pieces: [{ f: x => x * x - 3, xmin: -5, xmax: 5 }] },
-];
-let levelIdx = 0;
+// ---------- Random equations ----------
+// Every equation is a list of pieces, so piecewise functions can be added later.
+// Values are kept small so the whole graph is visible even at "Close" zoom.
+const randInt = (lo, hi) => lo + Math.floor(Math.random() * (hi - lo + 1));
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+const coefText = m => ({ "1": "", "-1": "−", "0.5": "½", "-0.5": "−½" }[String(m)] ?? `${m < 0 ? "−" : ""}${Math.abs(m)}`);
+const plusConst = b => (b === 0 ? "" : ` ${b < 0 ? "−" : "+"} ${Math.abs(b)}`);
+
+function makeLine() {                                       // y = mx + b
+  const m = pick([-3, -2, -1, -0.5, 0.5, 1, 2, 3]), b = randInt(-3, 3);
+  return { label: `y = ${coefText(m)}x${plusConst(b)}`, snap: "line",
+           pieces: [{ f: x => m * x + b, xmin: -10, xmax: 10 }] };
+}
+function makeFlat() {                                       // y = c
+  const c = pick([-3, -2, -1, 1, 2, 3]);
+  return { label: `y = ${c < 0 ? "−" : ""}${Math.abs(c)}`, snap: "line",
+           pieces: [{ f: () => c, xmin: -10, xmax: 10 }] };
+}
+function makeCurve() {                                      // y = ±(x − h)² + k
+  const a = pick([1, -1]), h = pick([-2, -1, 0, 0, 1, 2]);
+  const k = a > 0 ? randInt(-3, 1) : randInt(-1, 3);        // keep the turning point on screen
+  const inner = h === 0 ? "x²" : `(x ${h > 0 ? "−" : "+"} ${Math.abs(h)})²`;
+  return { label: `y = ${a < 0 ? "−" : ""}${inner}${plusConst(k)}`, snap: "curve",
+           pieces: [{ f: x => a * (x - h) ** 2 + k, xmin: -10, xmax: 10 }] };
+}
+function randomEquation(kind) {
+  if (kind === "line") return Math.random() < 0.8 ? makeLine() : makeFlat();
+  if (kind === "curve") return makeCurve();
+  const r = Math.random();                                  // mix: 55% lines, 15% flat, 30% curves
+  return r < 0.55 ? makeLine() : r < 0.7 ? makeFlat() : makeCurve();
+}
 
 // ---------- State ----------
+let level = null;          // the current equation
 let trace = [];            // A -> B contract: [{x, y, drawing}]
 let cursor = null;         // smoothed cursor in pixels
 let pinching = false, spaceHeld = false, revealed = false;
 let wasDrawing = false;    // was the pen down on the previous frame?
 let strokeStart = -1;      // index in `trace` where the current stroke began
+let fistSince = 0, fistUsed = false;   // for "hold a fist to clear"
+let feedbackId = 0;
+const ROUND = 5;           // progress dots: equations checked in this round of 5
+let doneInRound = 0;
 
 // ---------- Snapping (clean up a stroke when the pen lifts) ----------
 // Finds the line (degree 1) or parabola (degree 2) closest to the student's OWN points,
@@ -158,7 +224,6 @@ let strokeStart = -1;      // index in `trace` where the current stroke began
 // Returns coefficients [c0, c1, c2…] meaning y = c0 + c1·x + c2·x².
 function fitPolynomial(xs, ys, degree) {
   const n = degree + 1;
-  // Build the "normal equations" A·c = b, then solve with Gaussian elimination.
   const A = Array.from({ length: n }, (_, j) =>
     Array.from({ length: n }, (_, k) => xs.reduce((s, x) => s + x ** (j + k), 0)));
   const b = Array.from({ length: n }, (_, j) => xs.reduce((s, x, i) => s + ys[i] * x ** j, 0));
@@ -176,7 +241,6 @@ function fitPolynomial(xs, ys, degree) {
   }
   return b.map((v, i) => v / A[i][i]);
 }
-
 function snapStroke(start) {
   if (!$("snap").checked || start < 0) return;
   let end = start;
@@ -185,31 +249,39 @@ function snapStroke(start) {
   if (stroke.length < 8) return;                              // too short to judge its shape
   const xs = stroke.map(p => p.x), ys = stroke.map(p => p.y);
   if (Math.max(...xs) - Math.min(...xs) < 0.5) return;        // nearly vertical: leave as drawn
-  const coef = fitPolynomial(xs, ys, LEVELS[levelIdx].snap === "curve" ? 2 : 1);
+  const coef = fitPolynomial(xs, ys, level.snap === "curve" ? 2 : 1);
   if (!coef) return;
   for (let i = start; i <= end; i++) {
     trace[i].y = coef.reduce((s, c, k) => s + c * trace[i].x ** k, 0);   // keep x, clean up y
   }
 }
-
-// Call when the pen lifts (or before checking), so the stroke just drawn gets snapped.
-function finishStroke() {
+function finishStroke() {                                     // pen lifted (or Check pressed)
   if (wasDrawing) snapStroke(strokeStart);
   wasDrawing = false; strokeStart = -1;
 }
 
-const $ = id => document.getElementById(id);
-const ctx = $("board").getContext("2d");
-const css = name => getComputedStyle(document.body).getPropertyValue(name).trim();
-
 // ---------- Scoring (Person B) ----------
-function visibleRange(pc) {
-  let lo = Infinity, hi = -Infinity;
-  for (let i = 0; i <= 400; i++) {
-    const x = pc.xmin + (pc.xmax - pc.xmin) * i / 400, y = pc.f(x);
-    if (y >= YMIN && y <= YMAX) { lo = Math.min(lo, x); hi = Math.max(hi, x); }
+// Score = how CLOSE your ink is to the graph (precision) combined with how much of the
+// graph you COVERED (coverage), times a penalty for lots of extra ink.
+// Filling the screen covers everything, but most of that ink is far away → low precision → low score.
+const closeness = (d, tol) => (d <= tol / 2 ? 1 : Math.max(0, 1 - (d - tol / 2) / tol)); // 1 = on it, 0 = far
+const nearestDist = (q, pts) => pts.reduce((m, p) => Math.min(m, Math.hypot(p.x - q.x, p.y - q.y)), Infinity);
+const f1 = (p, r) => (p + r === 0 ? 0 : (2 * p * r) / (p + r));   // high only when BOTH are high
+const r2 = v => Math.round(v * 100) / 100;
+
+function curveSamples(pc) {                                   // points along the visible part of the graph
+  const lo = Math.max(pc.xmin, XMIN), hi = Math.min(pc.xmax, XMAX), N = 400, pts = [];
+  for (let i = 0; i <= N; i++) {
+    const x = lo + (hi - lo) * i / N, y = pc.f(x);
+    if (y >= YMIN && y <= YMAX) pts.push({ x, y, i });
   }
-  return [lo, hi];
+  return pts;
+}
+function curveLength(pts) {
+  let len = 0;
+  for (let j = 1; j < pts.length; j++)
+    if (pts[j].i === pts[j - 1].i + 1) len += Math.hypot(pts[j].x - pts[j - 1].x, pts[j].y - pts[j - 1].y);
+  return len;
 }
 function slope(xs, ys) {
   const n = xs.length, mx = xs.reduce((a, b) => a + b) / n, my = ys.reduce((a, b) => a + b) / n;
@@ -217,58 +289,104 @@ function slope(xs, ys) {
   for (let i = 0; i < n; i++) { num += (xs[i] - mx) * (ys[i] - my); den += (xs[i] - mx) ** 2; }
   return den === 0 ? 0 : num / den;
 }
+
 function score(trace, level, tol) {
-  const pts = trace.filter(p => p.drawing);
-  const pieces = level.pieces.map(pc => {
-    const [lo, hi] = visibleRange(pc);
-    const mine = pts.filter(p => p.x >= lo && p.x <= hi);
-    if (mine.length < 5 || hi <= lo) return { score: 0, mistake: "missing_piece" };
-    const avgErr = mine.reduce((s, p) => s + Math.abs(p.y - pc.f(p.x)), 0) / mine.length;
-    const BINS = 20;
-    const hit = new Set(mine.map(p => Math.min(BINS - 1, Math.floor((p.x - lo) / (hi - lo) * BINS))));
-    const coverage = hit.size / BINS;
-    const xs = mine.map(p => p.x);
-    const userSlope = slope(xs, mine.map(p => p.y));
-    const trueSlope = slope(xs, xs.map(pc.f));
+  // 1. Turn the drawing into small ink segments, each with a length.
+  const segs = [];
+  for (let i = 1; i < trace.length; i++) {
+    const a = trace[i - 1], b = trace[i];
+    if (!a.drawing || !b.drawing) continue;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len > 0) segs.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, len });
+  }
+  const inkLen = segs.reduce((s, g) => s + g.len, 0);
+  const curves = level.pieces.map(curveSamples);
+  const graphLen = curves.reduce((s, c) => s + curveLength(c), 0);
+  const empty = mistake => ({ overall: 0, precision: 0, coverage: 0, inkRatio: 0,
+                              pieces: level.pieces.map(() => ({ score: 0, mistake })) });
+  if (graphLen === 0) return empty("off_screen");
+  if (inkLen < 0.3) return empty("missing_piece");
+
+  // 2. Precision: what share of the ink (by length) is close to the graph.
+  for (const g of segs) g.d = Math.min(...curves.map(c => nearestDist(g, c)));
+  const precision = segs.reduce((s, g) => s + g.len * closeness(g.d, tol), 0) / inkLen;
+
+  // 3. Extra ink: tracing over the line up to 1.5× its length is free; beyond that costs points.
+  const inkRatio = inkLen / graphLen;
+  const efficiency = inkRatio <= 1.5 ? 1 : 1.5 / inkRatio;
+
+  // 4. Coverage per piece: split the graph into 20 parts; each part counts if ink is close to it.
+  const pieces = level.pieces.map((pc, idx) => {
+    const c = curves[idx];
+    if (c.length < 2) return { score: 0, mistake: "off_screen" };
+    const BINS = 20, best = new Array(BINS).fill(0);
+    c.forEach((p, j) => {
+      const bin = Math.min(BINS - 1, Math.floor((j / c.length) * BINS));
+      best[bin] = Math.max(best[bin], closeness(nearestDist(p, segs), tol));
+    });
+    const coverage = best.reduce((a, b) => a + b, 0) / BINS;
+
+    // 5. Facts for feedback, from ink within this piece's left-right range.
+    const lo = c[0].x, hi = c[c.length - 1].x;
+    const mine = segs.filter(g => g.x >= lo && g.x <= hi);
+    if (mine.length < 3) return { score: 0, mistake: "missing_piece", coverage: r2(coverage) };
+    const xs = mine.map(g => g.x);
+    const userSlope = slope(xs, mine.map(g => g.y)), trueSlope = slope(xs, xs.map(pc.f));
+    const w = mine.reduce((s, g) => s + g.len, 0);
+    const avgErr = mine.reduce((s, g) => s + g.len * g.d, 0) / w;
+    const avgOffset = mine.reduce((s, g) => s + g.len * (g.y - pc.f(g.x)), 0) / w;   // + = drawn too high
+
     let mistake = null;
     if (Math.abs(trueSlope) > 0.2 && Math.sign(userSlope) !== Math.sign(trueSlope)) mistake = "wrong_direction";
-    else if (avgErr > tol) mistake = "off_target";
+    else if (inkRatio > 2.5 || (inkRatio > 2 && precision < 0.5)) mistake = "too_much";
+    else if (precision < 0.6) mistake = "off_target";
     else if (coverage < 0.6) mistake = "incomplete";
-    const accuracy = Math.max(0, 1 - avgErr / (2 * tol));
-    const avgOffset = mine.reduce((s, p) => s + (p.y - pc.f(p.x)), 0) / mine.length; // + = drawn too high
-    const r2 = v => Math.round(v * 100) / 100;
+
     return {
-      score: Math.round(100 * accuracy * Math.min(1, coverage / 0.8)), mistake,
-      userSlope: r2(userSlope), trueSlope: r2(trueSlope),
-      avgErr: r2(avgErr), avgOffset: r2(avgOffset), coverage: r2(coverage),
+      score: Math.round(100 * f1(precision, coverage) * efficiency), mistake,
+      userSlope: r2(userSlope), trueSlope: r2(trueSlope), avgErr: r2(avgErr), avgOffset: r2(avgOffset),
+      coverage: r2(coverage), precision: r2(precision), inkRatio: r2(inkRatio),
     };
   });
-  const overall = Math.round(pieces.reduce((s, p) => s + p.score, 0) / pieces.length);
-  return { pieces, overall }; // B -> C contract
+  const coverage = pieces.reduce((s, p) => s + (p.coverage ?? 0), 0) / pieces.length;
+  const overall = Math.round(100 * f1(precision, coverage) * efficiency);
+  return { pieces, overall, precision: r2(precision), coverage: r2(coverage), inkRatio: r2(inkRatio) }; // B -> C
 }
 
 // ---------- Feedback (Person C) ----------
 // Claude explains the mistake; these fixed messages are the backup if the server or Claude is unavailable.
 const MESSAGES = {
   wrong_direction: "Your line went the opposite way. Look at the number in front of x: positive goes up, negative goes down.",
-  off_target: "Good shape! It's a bit away from where it should be. Check where it crosses the y-axis.",
+  too_much: "You drew lots of extra lines. Try one smooth, careful trace along the graph.",
+  off_target: "Good try! Your drawing is a bit away from the graph. Check where it crosses the y-axis.",
   incomplete: "Nice start! Try drawing across more of the graph.",
   missing_piece: "I didn't see a drawing yet. Pinch (or hold space) and trace the graph.",
+  off_screen: "The graph is off the screen. Try zooming out with the − button.",
 };
-let feedbackId = 0;
+const pct = v => `${Math.round(v * 100)}%`;
 async function showResult(r) {
   const id = ++feedbackId;
   const m = r.pieces.find(p => p.mistake)?.mistake;
-  const fallback = m ? MESSAGES[m] : "Amazing — that's the graph!";
+  const fallback = m ? MESSAGES[m]
+    : r.overall >= 80 ? "Amazing — that's the graph!"
+    : "Good effort! Try one smooth trace right on top of the graph.";
   const stars = r.overall >= 85 ? "⭐⭐⭐" : r.overall >= 60 ? "⭐⭐" : r.overall >= 30 ? "⭐" : "💪";
+  const breakdown = r.overall || r.precision
+    ? `On the graph: ${pct(r.precision)} · Graph covered: ${pct(r.coverage)}` +
+      (r.inkRatio > 1.5 ? " · Extra lines lowered your score" : "")
+    : "";
   const show = text => {
     if (id !== feedbackId) return;
     const badge = document.createElement("div"); badge.className = "score";
     badge.innerHTML = `${r.overall}<small>${stars}</small>`;
     const msg = document.createElement("div"); msg.textContent = text;
+    if (breakdown) {
+      const small = document.createElement("span"); small.className = "breakdown"; small.textContent = breakdown;
+      msg.append(small);
+    }
     $("result").replaceChildren(badge, msg);
   };
-  if (m === "missing_piece") return show(fallback);       // nothing drawn: no need to ask Claude
+  if (m === "missing_piece" || m === "off_screen") return show(fallback);   // no need to ask Claude
   show("Thinking…");
   try {
     const ctrl = new AbortController();
@@ -276,7 +394,7 @@ async function showResult(r) {
     const resp = await fetch("/api/feedback", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ equation: LEVELS[levelIdx].label, overall: r.overall, pieces: r.pieces }),
+      body: JSON.stringify({ equation: level.label, overall: r.overall, pieces: r.pieces }),
       signal: ctrl.signal,
     });
     clearTimeout(timer);
@@ -291,19 +409,19 @@ async function showResult(r) {
 
 // ---------- Drawing ----------
 function drawGrid() {
-  ctx.fillStyle = css("--bg"); ctx.globalAlpha = 0.6; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1;
+  ctx.clearRect(0, 0, W, H);                                  // wipe the last frame completely
+  ctx.fillStyle = css("--bg"); ctx.globalAlpha = 0.6; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; // webcam shows faintly through
   ctx.lineWidth = 1; ctx.strokeStyle = css("--grid");
-  for (let v = XMIN; v <= XMAX; v++) {
-    let [px] = toPx(v, 0); ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke();
-    let [, py] = toPx(0, v); ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke();
+  for (let v = Math.ceil(XMIN); v <= XMAX; v++) {             // a grid line every 1 unit
+    const [px] = toPx(v, 0); ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, H); ctx.stroke();
+    const [, py] = toPx(0, v); ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke();
   }
   ctx.lineWidth = 3; ctx.strokeStyle = css("--axis");
   const [ox, oy] = toPx(0, 0);
   ctx.beginPath(); ctx.moveTo(ox, 0); ctx.lineTo(ox, H); ctx.moveTo(0, oy); ctx.lineTo(W, oy); ctx.stroke();
   drawAxisNumbers(ox, oy);
 }
-
-// Numbers along each axis, plus "x" and "y" names.
+// Numbers along each axis (every STEP units), plus "x" and "y" names.
 // Each label gets an outline in the background color so it stays readable over grid lines.
 function drawAxisNumbers(ox, oy) {
   const fmt = v => (v < 0 ? "−" + -v : String(v));          // real minus sign reads better than "-"
@@ -314,13 +432,10 @@ function drawAxisNumbers(ox, oy) {
     ctx.textAlign = align; ctx.textBaseline = baseline;
     ctx.strokeText(text, x, y); ctx.fillText(text, x, y);
   };
-  for (let v = XMIN + 1; v < XMAX; v++) {                  // skip the edges so labels aren't cut off
-    if (v === 0) continue;
+  for (let v = Math.ceil(XMIN / STEP) * STEP; v < XMAX; v += STEP) {
+    if (v === 0 || Math.abs(v) > XMAX - 0.25) continue;      // skip 0 and labels at the very edge
     const [px] = toPx(v, 0);
     label(fmt(v), px, oy + 6, "center", "top");             // under the x-axis
-  }
-  for (let v = YMIN + 1; v < YMAX; v++) {
-    if (v === 0) continue;
     const [, py] = toPx(0, v);
     label(fmt(v), ox - 8, py, "right", "middle");           // left of the y-axis
   }
@@ -331,11 +446,12 @@ function drawAxisNumbers(ox, oy) {
 }
 function drawAnswer() {
   ctx.lineWidth = 5; ctx.strokeStyle = css("--answer"); ctx.setLineDash([12, 8]);
-  for (const pc of LEVELS[levelIdx].pieces) {
+  for (const pc of level.pieces) {
     ctx.beginPath(); let started = false;
+    const lo = Math.max(pc.xmin, XMIN), hi = Math.min(pc.xmax, XMAX);
     for (let i = 0; i <= 400; i++) {
-      const x = pc.xmin + (pc.xmax - pc.xmin) * i / 400, y = pc.f(x);
-      if (y < YMIN || y > YMAX) { started = false; continue; }
+      const x = lo + (hi - lo) * i / 400, y = pc.f(x);
+      if (y < YMIN - 1 || y > YMAX + 1) { started = false; continue; }
       const [px, py] = toPx(x, y);
       started ? ctx.lineTo(px, py) : ctx.moveTo(px, py); started = true;
     }
@@ -358,10 +474,21 @@ function drawCursor(drawing) {
   ctx.beginPath(); ctx.arc(cursor.x, cursor.y, drawing ? 14 : 18, 0, Math.PI * 2);
   ctx.lineWidth = 4; ctx.strokeStyle = css("--cursor"); ctx.fillStyle = css("--cursor");
   drawing ? ctx.fill() : ctx.stroke();
+  if (fistSince && !fistUsed) {                               // ring fills up while holding a fist
+    const t = Math.min(1, (performance.now() - fistSince) / 1000);
+    ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 28, -Math.PI / 2, -Math.PI / 2 + t * 2 * Math.PI);
+    ctx.lineWidth = 6; ctx.stroke();
+  }
+}
+function render(drawing = false) {
+  drawGrid(); if (revealed) drawAnswer(); drawTrace(); drawCursor(drawing);
 }
 
 // ---------- Hand tracking (Person A) ----------
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+// A fist = every fingertip is closer to the wrist than the middle joint of that finger.
+const isFist = lm => [[8, 6], [12, 10], [16, 14], [20, 18]]
+  .every(([tip, joint]) => dist(lm[tip], lm[0]) < dist(lm[joint], lm[0]));
 let landmarker, lastVideoTime = -1;
 
 async function start() {
@@ -377,7 +504,7 @@ async function start() {
     },
     runningMode: "VIDEO", numHands: 1,
   });
-  loadLevel(0);
+  newEquation();
   loop();
 }
 
@@ -392,11 +519,18 @@ function loop() {
       const raw = { x: (1 - tip.x) * W, y: tip.y * H };          // mirrored so it feels like a mirror
       const a = 0.35;                                             // smoothing (lower = smoother, laggier)
       cursor = cursor ? { x: cursor.x + a * (raw.x - cursor.x), y: cursor.y + a * (raw.y - cursor.y) } : raw;
-      const ratio = dist(lm[4], lm[8]) / dist(lm[0], lm[9]);       // pinch size relative to hand size
-      if (!pinching && ratio < 0.3) pinching = true;
-      else if (pinching && ratio > 0.45) pinching = false;
+      if (isFist(lm)) {                                           // fist: never draw; hold 1 s to clear
+        pinching = false;
+        if (!fistSince) fistSince = performance.now();
+        if (!fistUsed && performance.now() - fistSince > 1000) { clearDrawing(); fistUsed = true; }
+      } else {
+        fistSince = 0; fistUsed = false;
+        const ratio = dist(lm[4], lm[8]) / dist(lm[0], lm[9]);     // pinch size relative to hand size
+        if (!pinching && ratio < 0.3) pinching = true;
+        else if (pinching && ratio > 0.45) pinching = false;
+      }
     } else {
-      cursor = null; pinching = false;
+      cursor = null; pinching = false; fistSince = 0;
     }
   }
   const drawing = !!cursor && !revealed && (($("usePinch").checked && pinching) || spaceHeld);
@@ -407,38 +541,57 @@ function loop() {
   }
   if (drawing && !wasDrawing) { strokeStart = trace.length - 1; wasDrawing = true; } // pen down
   else if (!drawing && wasDrawing) finishStroke();                                     // pen up → snap
-  drawGrid(); if (revealed) drawAnswer(); drawTrace(); drawCursor(drawing);
+  render(drawing);
   requestAnimationFrame(loop);
 }
 
 // ---------- Controls ----------
-function loadLevel(i) {
-  levelIdx = (i + LEVELS.length) % LEVELS.length;
-  trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1;
-  $("eq").textContent = LEVELS[levelIdx].label; $("result").textContent = "";
-  $("dots").replaceChildren(...LEVELS.map((_, j) => {
+function renderDots() {                  // green = checked this round, yellow = current equation
+  $("dots").replaceChildren(...Array.from({ length: ROUND }, (_, j) => {
     const d = document.createElement("i");
-    d.className = j < levelIdx ? "done" : j === levelIdx ? "now" : "";
+    d.className = j < doneInRound ? "done" : j === doneInRound ? "now" : "";
     return d;
   }));
 }
+function clearDrawing() {                // same equation, fresh start (also lets you retry after Check)
+  trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1;
+  $("result").replaceChildren();
+}
+function newEquation() {
+  if (doneInRound >= ROUND) doneInRound = 0;                  // start a new round of 5
+  let next;
+  do { next = randomEquation($("kind").value); } while (level && next.label === level.label);
+  level = next; clearDrawing();
+  $("eq").textContent = level.label;
+  renderDots();
+}
 function check() {
-  if (revealed) return;                                 // avoid repeat checks / repeat Claude calls
+  if (revealed || !level) return;                       // avoid repeat checks / repeat Claude calls
   finishStroke();                                       // snap a stroke still in progress
-  const r = score(trace, LEVELS[levelIdx], parseFloat($("tolerance").value));
+  const r = score(trace, level, parseFloat($("tolerance").value));
   console.log("score", r);
   revealed = true; showResult(r);
+  doneInRound = Math.min(ROUND, doneInRound + 1); renderDots();
 }
-$("clear").onclick = () => loadLevel(levelIdx);
-$("next").onclick = () => loadLevel(levelIdx + 1);
+$("clear").onclick = clearDrawing;
+$("next").onclick = newEquation;
+$("kind").onchange = newEquation;
 $("check").onclick = check;
+$("zoomIn").onclick = () => setZoom(zoomIdx - 1);
+$("zoomOut").onclick = () => setZoom(zoomIdx + 1);
 $("contrast").onchange = e => document.body.classList.toggle("contrast", e.target.checked);
 addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT") return;
   if (e.code === "Space") { spaceHeld = true; e.preventDefault(); }
   if (e.code === "Enter") check();
+  if (e.code === "KeyC" || e.code === "Backspace") clearDrawing();
+  if (e.code === "KeyN") newEquation();
+  if (e.code === "Equal" || e.code === "NumpadAdd") setZoom(zoomIdx - 1);
+  if (e.code === "Minus" || e.code === "NumpadSubtract") setZoom(zoomIdx + 1);
 });
 addEventListener("keyup", e => { if (e.code === "Space") spaceHeld = false; });
 
+setZoom(1);
 start().catch(err => { $("eq").textContent = "Camera error"; $("status").textContent = err.message; });
 </script>
 </body>
