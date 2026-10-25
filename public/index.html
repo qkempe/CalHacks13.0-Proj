@@ -104,7 +104,7 @@
   }
   #status b { white-space:nowrap; }
 
-  /* Score card. Pops up over the top of the graph after Check (button, Enter or ✌️), then after ~2 s
+  /* Score card. Pops up over the top of the graph after Check (button, Enter or ✌️), then after ~4 s
      moves into the side panel under the equation, out of the way. Clear / Next / Previous remove it. */
   #result {
     position:relative; display:flex; align-items:center; gap:12px; padding:12px 48px 12px 14px;
@@ -332,6 +332,17 @@ const SHAPE = {
   hookLen: 0.45,      // a corner piece shorter than this (graph units) at the start/end is a hook: dropped
   cornerVsCurve: 1.7, // a corner must also fit 1.7× better than any curve (else a smooth bend = a curve)
 };
+// Lean toward the kind of graph being traced (only its TYPE — line or parabola — never the answer
+// itself). On a parabola, a bend counts as a curve much more easily and a V-ish U becomes a U; on a line,
+// a slight bow stays straight more easily. A clearly wrong shape still stays wrong.
+const LEAN = {
+  curve: { lineFit: 0.03, curveBetter: 0.8, curveFit: 0.09, bend: 0.03, bendIfLopsided: 0.02, bendIfNotLine: 0.025,
+           bendFloor: 0.22, cornerBetter: 0.45, cornerVsCurve: 3, assistCurve: 0.12, assistLine: 0.05 },
+  line:  { bend: 0.09, bendIfLopsided: 0.06, bendIfNotLine: 0.06, curveBetter: 0.5, bendFloor: 0.25,
+           assistLine: 0.09, assistCurve: 0.06 },
+};
+const shapeRulesFor = kind => ({ ...SHAPE, ...(LEAN[kind] || {}) });
+let SH = SHAPE;            // the rules in use for the stroke being recognised
 const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
 const rms = a => Math.sqrt(mean(a.map(v => v * v)));
 
@@ -425,19 +436,19 @@ function lopsided(pts) {
 // What is this stroke? → { kind, clean: points of the clean shape, toward: p → nearest point on it }
 function recognise(pts, depth = 0) {
   const one = recogniseOne(pts), corner = fitCorner(pts);
-  if (!corner || corner.turn < SHAPE.cornerAngle || corner.err > one.err * SHAPE.cornerBetter) return one;
-  if (one.curve && one.curve.bulge > SHAPE.bendFloor && one.curve.err < corner.err * SHAPE.cornerVsCurve)
+  if (!corner || corner.turn < SH.cornerAngle || corner.err > one.err * SH.cornerBetter) return one;
+  if (one.curve && one.curve.bulge > SH.bendFloor && one.curve.err < corner.err * SH.cornerVsCurve)
     return curveShape(pts, one.curve);                         // a smooth bend, not a sharp corner
   // A tiny piece at the start or end: a hook from pinching / letting go. Drop it, look at the rest.
   const shortSide = Math.min(corner.lenA, corner.lenB);
-  if (shortSide < SHAPE.hookLen) {
+  if (shortSide < SH.hookLen) {
     if (depth >= 2) return one;
     return recognise(corner.lenA < corner.lenB ? pts.slice(corner.k) : pts.slice(0, corner.k + 1), depth + 1);
   }
   // Two straight lines meeting at a corner — but only if each side really is straight.
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
   const size = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
-  if (corner.err > Math.max(SHAPE.lineFit * size, SHAPE.lineFloor)) return one;
+  if (corner.err > Math.max(SH.lineFit * size, SH.lineFloor)) return one;
   const { k, la, lb } = corner;
   let c = la.project(pts[k]);                                  // the corner: where the two lines cross
   const ax = la.at(1), bx = lb.at(1), a0 = la.at(0), b0 = lb.at(0);
@@ -471,16 +482,16 @@ function recogniseOne(pts) {
   const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
   const size = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
   const line = fitLine(pts), curve = fitCurve(pts);
-  const lineOk = line.err < Math.max(SHAPE.lineFit * size, SHAPE.lineFloor);
-  const curveFits = curve && curve.err < SHAPE.curveFit * size && curve.err < line.err * SHAPE.curveBetter;
-  const need = !lineOk ? SHAPE.bendIfNotLine : lopsided(pts) > SHAPE.lopsided ? SHAPE.bendIfLopsided : SHAPE.bend;
-  const bends = curve && curve.bulge > Math.max(SHAPE.bendFloor, need * size);
+  const lineOk = line.err < Math.max(SH.lineFit * size, SH.lineFloor);
+  const curveFits = curve && curve.err < SH.curveFit * size && curve.err < line.err * SH.curveBetter;
+  const need = !lineOk ? SH.bendIfNotLine : lopsided(pts) > SH.lopsided ? SH.bendIfLopsided : SH.bend;
+  const bends = curve && curve.bulge > Math.max(SH.bendFloor, need * size);
   if (curveFits && bends) return curveShape(pts, curve);      // a real bend, not a slightly bowed line
   if (lineOk) return { ...lineShape(pts, line), curve };
   // Not a clean match — but if it's still reasonably close to a line or a curve, assist toward that.
-  const curveClose = curve && curve.err < SHAPE.assistCurve * size && curve.bulge > SHAPE.bendFloor;
-  const lineClose = line.err < SHAPE.assistLine * size;
-  if (curveClose && (!lineClose || curve.err < line.err * SHAPE.curveBetter)) return curveShape(pts, curve);
+  const curveClose = curve && curve.err < SH.assistCurve * size && curve.bulge > SH.bendFloor;
+  const lineClose = line.err < SH.assistLine * size;
+  if (curveClose && (!lineClose || curve.err < line.err * SH.curveBetter)) return curveShape(pts, curve);
   if (lineClose) return lineShape(pts, line);
   return { kind: "free", clean: pts, toward: p => p, err: Math.min(line.err, curve?.err ?? Infinity), curve };
 }
@@ -511,6 +522,7 @@ function snapStroke(start) {
   pts = blur(pts, SHAPE.blur / SHAPE.spacing);
   let out = pts, kind = "free";
   if (pts.length >= 8) {
+    SH = shapeRulesFor(level?.snap);                          // lean toward this graph's type
     const shape = recognise(pts); kind = shape.kind;
     out = $("snap").checked ? shape.clean
       : pts.map(p => { const q = shape.toward(p); return { x: p.x + SHAPE.pullOff * (q.x - p.x), y: p.y + SHAPE.pullOff * (q.y - p.y) }; });
@@ -685,7 +697,7 @@ const MESSAGES = {
 };
 const pct = v => `${Math.round(v * 100)}%`;
 // The score card pops up over the graph, then after RESULT_DOCK_MS moves into the side panel.
-const RESULT_DOCK_MS = 2000;
+const RESULT_DOCK_MS = 4000;
 let dockTimer = 0;
 function popUpResult() {
   clearTimeout(dockTimer);
@@ -885,7 +897,8 @@ const extended = (lm, tip, joint) => dist(lm[tip], lm[0]) > dist(lm[joint], lm[0
 // Hand measurements are taken in 3D (camera pixels, with MediaPipe's depth estimate), so tilting the
 // hand toward or away from the camera doesn't change them. Flat 2D distances shrink when the hand
 // tilts, which made a closed pinch look like a curled finger and lifted the pen mid-line.
-const px3 = p => ({ x: p.x * 640, y: p.y * 480, z: (p.z ?? 0) * 640 });
+let camAspect = 4 / 3;     // camera picture width ÷ height (measurements use true proportions)
+const px3 = p => ({ x: p.x * 640, y: p.y * 640 / camAspect, z: (p.z ?? 0) * 640 });
 const dist3 = (a, b) => { a = px3(a); b = px3(b); return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z); };
 // Hand size in camera pixels: wrist → middle knuckle, or knuckle width (scaled to match), whichever
 // is bigger. Bigger = closer to the camera.
@@ -1039,6 +1052,12 @@ const PEN = {
   settleMs: 300,          // just after lifting, keep the drawing speed while the filter settles (no jump)
   catchUpPx: 200,         // pen up: every 200 px your hand moves shrinks the pointer–hand gap to ~37%
   returnMs: 250,          // off the graph it also catches up over time (~this long)
+  leaveDist: 60,          // …and once your hand is this many pixels from where you lifted the pen
+  jumpFrac: 0.05,         // a one-frame jump bigger than 5% of the screen width (drawing moves < 2%/frame) is a
+                          //   tracking glitch, not your hand: ignore it (a real fast move is only delayed 1 frame)
+  pressMs: 100,           // the pen holds still for this long after the fingers touch (pressing the pointer
+                          //   finger onto the thumb nudges the thumb, which drew little hooks)…
+                          // …and while the fingers are coming apart (letting go nudges it too)
   pushZone: 0.1,          // drawing with your thumb in the outer 10% of the camera picture…
   pushSpeed: 450,         // …keeps the pen moving that way, up to this many screen pixels per second
 };
@@ -1067,24 +1086,36 @@ let handAt = null;               // steadied hand position (viewport pixels), la
 let penOffset = { x: 0, y: 0 };  // pointer − hand: grows while drawing slowly, shrinks to 0 after
 let lastMoveT = 0;
 let penUpAt = 0;                 // when the pen was last lifted (0 = it's down)
+let liftedAt = null;             // where the hand was when the pen was lifted
+let lastRaw = null, jumpTo = null; // glitch filter: last accepted raw position, and an unconfirmed jump
 let handGraph = null;            // where the hand itself is, in graph units (no pen-speed scaling)
 let pushed = 0;                  // total distance the pen was pushed at the camera edge (graph units)
 const penIsDown = () => (pinching && !!pinchStart?.onCanvas) || (spaceHeld && !!cursor);
 
 // Move the page pointer to the thumb tip, and work out where that is on the graph (if over it).
 function movePointer(tip, now) {
-  const raw = viewportPointFor(tip, false);
-  if (!pointer) { steadyX.reset(); steadyY.reset(); handAt = null; penOffset = { x: 0, y: 0 }; handSpeed = 0; }
+  let raw = viewportPointFor(tip, false);
+  if (!pointer) { steadyX.reset(); steadyY.reset(); handAt = null; penOffset = { x: 0, y: 0 }; handSpeed = 0; lastRaw = null; jumpTo = null; }
+  // One-frame tracking glitch? Hold the last position for a frame; if the next frame agrees with the jump,
+  // it was a real fast move and we take it, otherwise it's ignored.
+  if (lastRaw && Math.hypot(raw.x - lastRaw.x, raw.y - lastRaw.y) > PEN.jumpFrac * innerWidth) {
+    const confirmed = jumpTo && Math.hypot(raw.x - jumpTo.x, raw.y - jumpTo.y) < PEN.jumpFrac * innerWidth / 2;
+    if (!confirmed) { jumpTo = raw; raw = lastRaw; } else jumpTo = null;
+  } else jumpTo = null;
+  lastRaw = raw;
   const down = penIsDown(), opts = down ? PEN.drawFilter : PEN.pointFilter;
-  if (down) penUpAt = 0; else if (!penUpAt) penUpAt = now;
+  if (down) { penUpAt = 0; liftedAt = null; } else if (!penUpAt) penUpAt = now;
   const settling = !down && now - penUpAt < PEN.settleMs;    // the pen was lifted a moment ago
   const hand = { x: steadyX.filter(raw.x, now / 1000, opts), y: steadyY.filter(raw.y, now / 1000, opts) };
   if (handAt) {
     const dt = Math.max(0, now - lastMoveT);
     const dx = hand.x - handAt.x, dy = hand.y - handAt.y;
     if (dt > 0) handSpeed += 0.5 * (Math.hypot(dx, dy) / innerWidth / (dt / 1000) - handSpeed);
+    // Fingers just touched, or coming apart: hold the pen still (k = −1 cancels the hand's movement).
+    const pressing = down && pinching && pinchStart && now - pinchStart.t < PEN.pressMs;
+    const releasing = down && pinching && openSince > 0;
     if (down || settling) {      // pen down: slow movement is scaled down, fast movement isn't
-      const k = penGain(handSpeed) - 1;
+      const k = pressing || releasing ? -1 : penGain(handSpeed) - 1;
       penOffset.x += k * dx; penOffset.y += k * dy;
       // Out of room? The slower pen needs more hand movement than the camera can see, so holding
       // your thumb at the edge of the picture keeps the pen going that way (deeper = faster).
@@ -1098,7 +1129,12 @@ function movePointer(tip, now) {
     } else {                     // pen up: catch up with the hand as it moves (holding still keeps the pen put)
       const moving = handSpeed > PEN.slowSpeed;               // real movement, not shake
       let decay = moving ? Math.exp(-Math.hypot(dx, dy) / PEN.catchUpPx) : 1;
-      if (!cursor) decay *= Math.exp(-dt / PEN.returnMs);    // off the graph: also catch up over time
+      // Once your hand has moved away from where you lifted the pen (or the pointer is off the graph), you're
+      // not carrying on the line: the pointer catches up with your hand over time, even if your hand has
+      // stopped (e.g. on a button you're about to pinch).
+      if (!liftedAt) liftedAt = { ...hand };
+      const movedAway = Math.hypot(hand.x - liftedAt.x, hand.y - liftedAt.y) > PEN.leaveDist;
+      if (!cursor || movedAway) decay *= Math.exp(-dt / PEN.returnMs);
       penOffset.x *= decay; penOffset.y *= decay;
     }
   }
@@ -1222,8 +1258,12 @@ function updatePointerUI() {
 async function start() {
   $("eq").textContent = "Starting camera…";
   const video = $("cam");
-  video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+  // A sharper picture (same 4:3 shape as before) gives the hand tracker more detail on the fingertips,
+  // so the thumb tip wobbles less, especially when you sit back from the camera.
+  video.srcObject = await navigator.mediaDevices.getUserMedia({
+    video: { width: { ideal: 960 }, height: { ideal: 720 }, aspectRatio: { ideal: 4 / 3 }, frameRate: { ideal: 30 } } });
   await new Promise(r => video.onloadeddata = r);
+  if (video.videoWidth && video.videoHeight) camAspect = video.videoWidth / video.videoHeight;
   const files = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
   landmarker = await HandLandmarker.createFromOptions(files, {
     baseOptions: {
