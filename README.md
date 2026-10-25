@@ -9,6 +9,8 @@ Trace math functions in the air with your finger. A webcam tracks your hand, the
 
 Your thumb tip is the pen: bring your pointer finger down onto it and hold on the graph (or hold Space) to draw. Press Enter to check.
 
+Everything fits on one screen: the title top-left, the ⬅ Previous / 🧽 Clear / ✅ Check / Next ➜ buttons across the top, the graph, and a side panel with the equation, your feedback, and the settings. Previous and Next work like back/forward (keys: P / N).
+
 Hand controls:
 - Quick pinch on a button, checkbox, or dropdown to click it
 - Make a tight fist and hold it for about 1 second to clear (a ring fills up). Pinching always wins, so curling your fingers while drawing won't clear
