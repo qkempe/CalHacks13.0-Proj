@@ -29,6 +29,7 @@
     <option value="0.75">Normal</option>
     <option value="0.4">Challenge</option>
   </select>
+  <label><input type="checkbox" id="snap" checked> Snap to clean shape</label>
   <label><input type="checkbox" id="contrast"> High contrast</label>
   <button id="clear">Clear</button>
   <button id="check">Check ✓</button>
@@ -51,12 +52,13 @@ const toGraph = (px, py) => [XMIN + px / W * (XMAX - XMIN), YMIN + (H - py) / H 
 
 // ---------- Levels (Person B owns this) ----------
 // Each level is a list of pieces, so piecewise functions can be added later without changing scoring.
+// `snap` = which clean shape a finished stroke straightens into: "line" or "curve" (a parabola).
 const LEVELS = [
-  { label: "y = 2x + 1",  pieces: [{ f: x => 2 * x + 1, xmin: -5, xmax: 5 }] },
-  { label: "y = −x + 3",  pieces: [{ f: x => -x + 3,    xmin: -5, xmax: 5 }] },
-  { label: "y = 3",       pieces: [{ f: x => 3,         xmin: -5, xmax: 5 }] },
-  { label: "y = ½x − 2",  pieces: [{ f: x => 0.5 * x - 2, xmin: -5, xmax: 5 }] },
-  { label: "y = x² − 3",  pieces: [{ f: x => x * x - 3, xmin: -5, xmax: 5 }] },
+  { label: "y = 2x + 1",  snap: "line",  pieces: [{ f: x => 2 * x + 1, xmin: -5, xmax: 5 }] },
+  { label: "y = −x + 3",  snap: "line",  pieces: [{ f: x => -x + 3,    xmin: -5, xmax: 5 }] },
+  { label: "y = 3",       snap: "line",  pieces: [{ f: x => 3,         xmin: -5, xmax: 5 }] },
+  { label: "y = ½x − 2",  snap: "line",  pieces: [{ f: x => 0.5 * x - 2, xmin: -5, xmax: 5 }] },
+  { label: "y = x² − 3",  snap: "curve", pieces: [{ f: x => x * x - 3, xmin: -5, xmax: 5 }] },
 ];
 let levelIdx = 0;
 
@@ -64,6 +66,54 @@ let levelIdx = 0;
 let trace = [];            // A -> B contract: [{x, y, drawing}]
 let cursor = null;         // smoothed cursor in pixels
 let pinching = false, spaceHeld = false, revealed = false;
+let wasDrawing = false;    // was the pen down on the previous frame?
+let strokeStart = -1;      // index in `trace` where the current stroke began
+
+// ---------- Snapping (clean up a stroke when the pen lifts) ----------
+// Finds the line (degree 1) or parabola (degree 2) closest to the student's OWN points,
+// using least squares. It never looks at the correct answer, so it can't draw it for them.
+// Returns coefficients [c0, c1, c2…] meaning y = c0 + c1·x + c2·x².
+function fitPolynomial(xs, ys, degree) {
+  const n = degree + 1;
+  // Build the "normal equations" A·c = b, then solve with Gaussian elimination.
+  const A = Array.from({ length: n }, (_, j) =>
+    Array.from({ length: n }, (_, k) => xs.reduce((s, x) => s + x ** (j + k), 0)));
+  const b = Array.from({ length: n }, (_, j) => xs.reduce((s, x, i) => s + ys[i] * x ** j, 0));
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    if (Math.abs(A[p][c]) < 1e-9) return null;               // not enough spread to fit
+    [A[c], A[p]] = [A[p], A[c]]; [b[c], b[p]] = [b[p], b[c]];
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = A[r][c] / A[c][c];
+      for (let k = c; k < n; k++) A[r][k] -= f * A[c][k];
+      b[r] -= f * b[c];
+    }
+  }
+  return b.map((v, i) => v / A[i][i]);
+}
+
+function snapStroke(start) {
+  if (!$("snap").checked || start < 0) return;
+  let end = start;
+  while (end + 1 < trace.length && trace[end + 1].drawing) end++;
+  const stroke = trace.slice(start, end + 1);
+  if (stroke.length < 8) return;                              // too short to judge its shape
+  const xs = stroke.map(p => p.x), ys = stroke.map(p => p.y);
+  if (Math.max(...xs) - Math.min(...xs) < 0.5) return;        // nearly vertical: leave as drawn
+  const coef = fitPolynomial(xs, ys, LEVELS[levelIdx].snap === "curve" ? 2 : 1);
+  if (!coef) return;
+  for (let i = start; i <= end; i++) {
+    trace[i].y = coef.reduce((s, c, k) => s + c * trace[i].x ** k, 0);   // keep x, clean up y
+  }
+}
+
+// Call when the pen lifts (or before checking), so the stroke just drawn gets snapped.
+function finishStroke() {
+  if (wasDrawing) snapStroke(strokeStart);
+  wasDrawing = false; strokeStart = -1;
+}
 
 const $ = id => document.getElementById(id);
 const ctx = $("board").getContext("2d");
@@ -235,8 +285,10 @@ function loop() {
   if (cursor) {
     const [gx, gy] = toGraph(cursor.x, cursor.y);
     trace.push({ x: gx, y: gy, drawing });
-    if (trace.length > 5000) trace.shift();
+    if (trace.length > 5000) { trace.shift(); if (strokeStart > 0) strokeStart--; }
   }
+  if (drawing && !wasDrawing) { strokeStart = trace.length - 1; wasDrawing = true; } // pen down
+  else if (!drawing && wasDrawing) finishStroke();                                     // pen up → snap
   drawGrid(); if (revealed) drawAnswer(); drawTrace(); drawCursor(drawing);
   requestAnimationFrame(loop);
 }
@@ -244,11 +296,12 @@ function loop() {
 // ---------- Controls ----------
 function loadLevel(i) {
   levelIdx = (i + LEVELS.length) % LEVELS.length;
-  trace = []; revealed = false; feedbackId++;
+  trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1;
   $("eq").textContent = LEVELS[levelIdx].label; $("result").textContent = "";
 }
 function check() {
   if (revealed) return;                                 // avoid repeat checks / repeat Claude calls
+  finishStroke();                                       // snap a stroke still in progress
   const r = score(trace, LEVELS[levelIdx], parseFloat($("tolerance").value));
   console.log("score", r);
   revealed = true; showResult(r);
