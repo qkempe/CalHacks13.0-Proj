@@ -16,8 +16,8 @@ Hand controls:
 Zoom with the − / + buttons in the corner of the graph, or the + and − keys.
 
 Steady drawing (nobody's hand is steady in the air):
-- While you draw, the pen works like a mouse: slow, careful movement (and shake) is scaled down so it stays small, but a normal-speed sweep moves the pen 1:1, so you can draw across the whole graph without slowing down. **Pen speed** (Steady / Normal / Fast) sets how much slow movement is scaled down. After you lift the pen it stays where you stopped while it's over the graph, and catches up with your hand when you move off the graph to the buttons.
-- The line only breaks when you open your fingers: a pinch that looks open for a split second (motion blur) or the camera losing your hand for a moment won't lift the pen.
+- While you draw, the pen moves less than your hand, like a mouse: slow, careful movement (and shake) is scaled down the most, quicker sweeps a bit less. **Pen speed** sets how much: 🐌 Steady (about 0.1–0.3× your hand), ✍️ Normal (about 0.2–0.45×), ⚡ Fast (about 0.4–1×). After you lift the pen it stays where you stopped while your hand holds still, so you can pinch again and carry on; as soon as your hand moves, the pointer catches up with it so you can reach the buttons.
+- The line only breaks when you open your fingers. A pinch that looks open for a split second (motion blur), a tilted hand, or the camera losing your hand for a moment won't lift the pen.
 - When you lift the pen, the game works out what you meant from your own stroke: a straight line (any angle), a curve, or a free shape. It never looks at the answer, so a wrong shape stays wrong; it just looks neater.
   - **Snap to clean shape ON:** the stroke becomes that clean line or curve.
   - **OFF:** the shake is smoothed out and the stroke is pulled partway toward the shape.

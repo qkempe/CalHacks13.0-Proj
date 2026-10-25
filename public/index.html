@@ -160,10 +160,11 @@
       <option value="0.75">🐇 Normal</option>
       <option value="0.4">🚀 Challenge</option>
     </select>
+    <!-- value = "slow gain, fast gain": pen distance ÷ hand distance for slow and for quick hand movement -->
     <select id="penSpeed" aria-label="Pen speed while drawing">
-      <option value="0.25">🐌 Steady pen</option>
-      <option value="0.4" selected>✍️ Normal pen</option>
-      <option value="0.65">⚡ Fast pen</option>
+      <option value="0.1,0.3">🐌 Steady pen</option>
+      <option value="0.18,0.45" selected>✍️ Normal pen</option>
+      <option value="0.4,1">⚡ Fast pen</option>
     </select>
     <label><input type="checkbox" id="snap" checked>Snap to clean shape</label>
     <label><input type="checkbox" id="contrast">High contrast</label>
@@ -659,10 +660,10 @@ function render(drawing = false) {
 // Tuning knobs (test these on a real webcam and adjust):
 const HAND = {
   edge: 0.12,               // ignore this much of each camera edge, so you can reach every corner of the page
-  pinchOn: 0.3, pinchOff: 0.45,   // pinch closes below / opens above this (thumb–index gap ÷ hand size)
+  pinchOn: 0.3, pinchOff: 0.4,    // pinch closes below / opens above this (thumb–index gap ÷ hand size, in 3D)
   releaseMs: 150,                 // fingers must stay open this long to lift the pen (fast moves blur the
                                   //   camera image, so a pinch can look open for a frame or two)
-  lostGraceMs: 250,               // if the camera loses your hand for less than this, carry on as if it hadn't
+  lostGraceMs: 400,               // if the camera loses your hand for less than this, carry on as if it hadn't
   tapMs: 600, tapMovePx: 50,      // a "click" = pinch released within 600 ms, moving less than 50 px
   fistMs: 1000,                   // hold a fist this long to clear (after it's confirmed)
   fistConfirmMs: 300,             // a fist must be seen this long before it counts (filters quick blips)
@@ -676,9 +677,17 @@ const extended = (lm, tip, joint) => dist(lm[tip], lm[0]) > dist(lm[joint], lm[0
 // "Curled" = fingertip pulled right down to its knuckle (about as close to the wrist as the knuckle).
 // The pointer finger tells a pinch from a fist: in a pinch it reaches out to the thumb, in a fist
 // it's curled. So a curled pointer finger is never a pinch, and a fist needs all four curled.
-const curled = (lm, tip, knuckle) => dist(lm[tip], lm[0]) < HAND.fistCurl * dist(lm[knuckle], lm[0]);
+// Hand measurements are taken in 3D (camera pixels, with MediaPipe's depth estimate), so tilting the
+// hand toward or away from the camera doesn't change them. Flat 2D distances shrink when the hand
+// tilts, which made a closed pinch look like a curled finger and lifted the pen mid-line.
+const px3 = p => ({ x: p.x * 640, y: p.y * 480, z: (p.z ?? 0) * 640 });
+const dist3 = (a, b) => { a = px3(a); b = px3(b); return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z); };
+// Hand size in camera pixels: wrist → middle knuckle, or knuckle width (scaled to match), whichever
+// is bigger. Bigger = closer to the camera.
+const handSize = lm => Math.max(dist3(lm[0], lm[9]), 1.6 * dist3(lm[5], lm[17]));
+const curled = (lm, tip, knuckle) => dist3(lm[tip], lm[0]) < HAND.fistCurl * dist3(lm[knuckle], lm[0]);
 const isFist = lm => [[8, 5], [12, 9], [16, 13], [20, 17]].every(([tip, knuckle]) => curled(lm, tip, knuckle));
-const pinchRatio = lm => dist(lm[4], lm[8]) / dist(lm[0], lm[9]);   // thumb–index gap relative to hand size
+const pinchRatio = lm => dist3(lm[4], lm[8]) / handSize(lm);   // thumb–index gap relative to hand size
 
 // ----- Main hand: who controls the pen -----
 // MediaPipe doesn't say which hand is which from frame to frame, so we follow the main hand
@@ -697,10 +706,6 @@ const HANDS = {
   background: 0.6,    // hands smaller than 60% of the closest hand are background people: ignored
   minSize: 30,        // hands smaller than this (camera pixels) are too far away to use at all
 };
-// Hand size in camera pixels: wrist → middle knuckle, or knuckle width, whichever is bigger
-// (so it stays steady when the hand turns sideways or tilts). Bigger = closer to the camera.
-const px = p => ({ x: p.x * 640, y: p.y * 480 });            // camera coords → camera pixels (true proportions)
-const handSize = lm => Math.max(dist(px(lm[0]), px(lm[9])), dist(px(lm[5]), px(lm[17])));
 let main = null;           // { pos, side, size, seen } of the hand in control; null = pick the closest hand
 let challenger = null;     // { pos, since, lm } a hand waiting to take control (drives the takeover ring)
 
@@ -738,6 +743,9 @@ function pickMainHand(hands, now) {          // hands: front hands, closest firs
       if (cost < bestCost) { matched = h; bestCost = cost; }
     }
     if (bestCost >= HANDS.matchDist) matched = null;
+    // Only one hand in front of the camera and it's near where yours was: it's yours, even if blur or
+    // a quick turn made it look a different size this frame.
+    if (!matched && hands.length === 1 && dist(hands[0].lm[9], main.pos) < HANDS.matchDist) matched = hands[0];
   }
 
   // Who could take over? While the main hand is visible, only a clearly closer hand.
@@ -782,22 +790,26 @@ function canvasPointFor(p) {
 // 1. A "One Euro" filter steadies the hand: lots of smoothing when you move slowly (that's when
 //    shake shows), little when you move fast (so the pointer doesn't lag behind big moves).
 // 2. While the pen is down, how far the pen moves depends on how FAST your hand moves (like a mouse):
-//    slow, careful movement (and shake) is scaled down to the "Pen speed" setting, so it stays tiny;
-//    a quick sweep moves the pen 1:1, so you can still draw across the whole graph at a normal pace.
-//    After you lift the pen it stays where you stopped while it's over the graph; once it leaves the
-//    graph it glides back under your hand, so you can still reach every button.
+//    slow, careful movement (and shake) is scaled down the most, so it stays tiny; a quicker sweep is
+//    scaled down less, so long lines don't take forever. "Pen speed" sets both amounts.
+//    After you lift the pen it stays where you stopped while your hand holds still (pinch again to
+//    carry on the line); as soon as your hand moves, it catches up with your hand, so you can still
+//    reach every button.
 const PEN = {
   pointFilter: { minCutoff: 1.5, beta: 0.006 },   // pointing at buttons: responsive
   drawFilter:  { minCutoff: 1.0, beta: 0.006 },   // drawing: a bit steadier (lower = smoother, more lag)
-  fastGain: 1.0,          // a quick sweep moves the pen 1:1 with the hand
   slowSpeed: 0.03,        // hand speeds (screen widths per second) at or below this use the slow pen…
-  fastSpeed: 0.18,        // …at or above this (a relaxed sweep) use fastGain; in between it blends
-  returnMs: 250,          // off the graph, the pointer catches up with your hand over ~this long
+  fastSpeed: 0.18,        // …at or above this (a relaxed sweep) use the fast gain; in between it blends
+  settleMs: 300,          // just after lifting, keep the drawing speed while the filter settles (no jump)
+  catchUpPx: 200,         // pen up: every 200 px your hand moves shrinks the pointer–hand gap to ~37%
+  returnMs: 250,          // off the graph it also catches up over time (~this long)
 };
-const slowGain = () => parseFloat($("penSpeed").value);    // pen distance ÷ hand distance when moving slowly
+// Pen speed setting → [slow gain, fast gain]: pen distance ÷ hand distance for slow / quick movement.
+const penGains = () => $("penSpeed").value.split(",").map(Number);
 function penGain(speed) {                                  // speed in screen widths per second
+  const [slow, fast] = penGains();
   const u = Math.min(1, Math.max(0, (speed - PEN.slowSpeed) / (PEN.fastSpeed - PEN.slowSpeed)));
-  return slowGain() + (PEN.fastGain - slowGain()) * u * u * (3 - 2 * u);
+  return slow + (fast - slow) * u * u * (3 - 2 * u);
 }
 let handSpeed = 0;               // smoothed hand speed, screen widths per second
 class OneEuro {                  // https://gery.casiez.net/1euro/ (one axis)
@@ -816,6 +828,7 @@ const steadyX = new OneEuro(), steadyY = new OneEuro();
 let handAt = null;               // steadied hand position (viewport pixels), last frame
 let penOffset = { x: 0, y: 0 };  // pointer − hand: grows while drawing slowly, shrinks to 0 after
 let lastMoveT = 0;
+let penUpAt = 0;                 // when the pen was last lifted (0 = it's down)
 const penIsDown = () => (pinching && !!pinchStart?.onCanvas) || spaceHeld;
 
 // Move the page pointer to the thumb tip, and work out where that is on the graph (if over it).
@@ -823,18 +836,22 @@ function movePointer(tip, now) {
   const raw = viewportPointFor(tip);
   if (!pointer) { steadyX.reset(); steadyY.reset(); handAt = null; penOffset = { x: 0, y: 0 }; handSpeed = 0; }
   const down = penIsDown(), opts = down ? PEN.drawFilter : PEN.pointFilter;
+  if (down) penUpAt = 0; else if (!penUpAt) penUpAt = now;
+  const settling = !down && now - penUpAt < PEN.settleMs;    // the pen was lifted a moment ago
   const hand = { x: steadyX.filter(raw.x, now / 1000, opts), y: steadyY.filter(raw.y, now / 1000, opts) };
   if (handAt) {
     const dt = Math.max(0, now - lastMoveT);
     const dx = hand.x - handAt.x, dy = hand.y - handAt.y;
     if (dt > 0) handSpeed += 0.5 * (Math.hypot(dx, dy) / innerWidth / (dt / 1000) - handSpeed);
-    if (down) {                  // pen down: slow movement is scaled down, fast movement isn't
+    if (down || settling) {      // pen down: slow movement is scaled down, fast movement isn't
       const k = penGain(handSpeed) - 1;
       penOffset.x += k * dx; penOffset.y += k * dy;
-    } else if (!cursor) {        // pen up and off the graph: glide back under the hand (to reach buttons)
-      const decay = Math.exp(-dt / PEN.returnMs);
+    } else {                     // pen up: catch up with the hand as it moves (holding still keeps the pen put)
+      const moving = handSpeed > PEN.slowSpeed;               // real movement, not shake
+      let decay = moving ? Math.exp(-Math.hypot(dx, dy) / PEN.catchUpPx) : 1;
+      if (!cursor) decay *= Math.exp(-dt / PEN.returnMs);    // off the graph: also catch up over time
       penOffset.x *= decay; penOffset.y *= decay;
-    }                            // pen up over the graph: stay put, so you can carry on from where you stopped
+    }
   }
   handAt = hand; lastMoveT = now;
   pointer = { x: Math.min(innerWidth, Math.max(0, hand.x + penOffset.x)),
@@ -881,7 +898,9 @@ function oneHand(lm, now) {
   mode = "point";
   const wasPinching = pinching;
   const ratio = pinchRatio(lm), pointerCurled = curled(lm, 8, 5);   // thumb on a curled finger = fist, not pinch
-  const open = ratio > HAND.pinchOff || pointerCurled;
+  // Only OPEN fingers (or a full fist) lift the pen. A curled pointer finger can only stop a pinch from
+  // starting (that's a fist forming), because a tilted pinch can look curled while the fingers still touch.
+  const open = ratio > HAND.pinchOff || isFist(lm);
   if (!pinching && ratio < HAND.pinchOn && !pointerCurled) { pinching = true; openSince = 0; }
   else if (pinching && open) {                                // only lift the pen once the fingers STAY open
     if (!openSince) openSince = now;
