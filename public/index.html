@@ -144,7 +144,8 @@
   </div>
   <div id="result" aria-live="polite"></div>
   <div id="status">
-    <b>👌 Pinch &amp; hold</b> on the graph to draw · <b>👌 Quick pinch</b> on a button to click ·
+    <b>👍 Your thumb is the pen:</b> tap your pointer finger onto it and hold on the graph to draw ·
+    <b>👌 Quick pinch</b> on a button to click ·
     <b>✌️ Two fingers</b> + move to scroll · <b>✊ Fist</b> for 1 second to clear ·
     <b>🤲 Hands together</b> to zoom in · <b>👐 Push hands apart</b> to zoom out
   </div>
@@ -501,15 +502,28 @@ function drawCursor(drawing) {
     ctx.lineWidth = 6; ctx.stroke();
   }
 }
+function drawTakeover() {                                     // ring fills while a new hand waits to take control
+  if (!aloneSince || !newHand) return;
+  const c = canvasPointFor(newHand[4]);
+  if (!c) return;                                             // only drawn when that hand is over the graph
+  const t = Math.min(1, (performance.now() - aloneSince) / TAKEOVER_MS);
+  ctx.beginPath(); ctx.arc(c.x, c.y, 22, 0, Math.PI * 2);
+  ctx.lineWidth = 3; ctx.strokeStyle = css("--axis"); ctx.setLineDash([4, 6]); ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath(); ctx.arc(c.x, c.y, 22, -Math.PI / 2, -Math.PI / 2 + t * 2 * Math.PI);
+  ctx.lineWidth = 6; ctx.strokeStyle = css("--cursor"); ctx.stroke();
+}
 function render(drawing = false) {
-  drawGrid(); if (revealed) drawAnswer(); drawTrace(); drawCursor(drawing);
+  drawGrid(); if (revealed) drawAnswer(); drawTrace(); drawCursor(drawing); drawTakeover();
 }
 
 // ---------- Hand tracking (Person A) ----------
-// One hand  → your index finger is a pointer for the whole page:
+// The MAIN hand's thumb tip is a pointer for the whole page (the thumb stays still while the
+// pointer finger comes down to pinch, so lines are steadier):
 //   pinch & hold on the graph = draw · quick pinch on a button = click ·
 //   two fingers up (✌️) + move = scroll · fist for 1 second = clear
-// Two hands → zoom: hold them together = zoom in · push them apart quickly = zoom out
+// The first hand seen is the main hand. Another hand is ignored for drawing; it only takes over
+// after being alone on screen for 2 seconds (a ring fills while it waits).
+// Two OPEN hands on purpose → zoom: hold them together = zoom in · push them apart quickly = zoom out
 //
 // Tuning knobs (test these on a real webcam and adjust):
 const HAND = {
@@ -532,6 +546,41 @@ const extended = (lm, tip, joint) => dist(lm[tip], lm[0]) > dist(lm[joint], lm[0
 const isFist = lm => [[8, 6], [12, 10], [16, 14], [20, 18]].every(([t, j]) => !extended(lm, t, j));
 const isTwoFingers = lm => extended(lm, 8, 6) && extended(lm, 12, 10) && !extended(lm, 16, 14) && !extended(lm, 20, 18);
 const palmWidth = lm => dist(px(lm[5]), px(lm[17]));         // knuckle of index → knuckle of pinky
+const pinchRatio = lm => dist(lm[4], lm[8]) / dist(lm[0], lm[9]);   // thumb–index gap relative to hand size
+// An open palm = all four fingers out and not pinching. Only two open palms count as a zoom gesture,
+// so a second hand that wanders in while you draw doesn't interrupt you.
+const isOpenPalm = lm => [[8, 6], [12, 10], [16, 14], [20, 18]].every(([t, j]) => extended(lm, t, j))
+  && pinchRatio(lm) > HAND.pinchOff;
+
+// ----- Main hand: who controls the pen (from the teammate's version) -----
+// MediaPipe doesn't say which hand is which from frame to frame, so we follow the main hand
+// by where it was last seen and whether it is a left or right hand.
+const TAKEOVER_MS = 2000;  // a new hand must be alone this long to take control
+const LOST_MS = 1000;      // the main hand can vanish this long (tracking blink) and still be recognized
+const MATCH_DIST = 0.35;   // how far (fraction of the screen) the main hand can move between sightings
+let main = null;           // { pos, side, seen } of the hand in control; null until a hand first appears
+let aloneSince = 0;        // when a lone non-main hand appeared (0 = no takeover in progress)
+let newHand = null;        // that lone hand's landmarks, to draw the takeover ring
+
+function pickMainHand(hands, now) {          // hands: [{ lm, side }] → the main hand, or null
+  const take = h => { main = { pos: h.lm[9], side: h.side, seen: now }; aloneSince = 0; newHand = null; return h; };
+  if (!hands.length) { aloneSince = 0; newHand = null; return null; }
+  if (!main) return take(hands[0]);                           // very first hand: no waiting
+  let best = null, bestCost = Infinity;
+  if (now - main.seen <= LOST_MS) {
+    for (const h of hands) {                                  // closest hand, preferring the same side
+      const cost = dist(h.lm[9], main.pos) + (h.side !== main.side ? 0.3 : 0);
+      if (cost < bestCost) { best = h; bestCost = cost; }
+    }
+  }
+  if (best && bestCost < MATCH_DIST) return take(best);
+  if (hands.length === 1) {                                   // a different hand, alone on screen
+    if (!aloneSince) { aloneSince = now; toast("✋ New hand: hold still to take over"); }
+    newHand = hands[0].lm;
+    if (now - aloneSince >= TAKEOVER_MS) { cursor = null; pinching = false; fistSince = 0; return take(hands[0]); }
+  } else { aloneSince = 0; newHand = null; }                  // main hand gone and 2+ others: nobody draws
+  return null;
+}
 
 let landmarker, lastVideoTime = -1;
 let pointer = null;              // smoothed pointer position on the page (viewport pixels)
@@ -551,10 +600,20 @@ function zoomBy(dir, msg) {
   toast(zoomIdx !== before ? msg : dir < 0 ? "Already zoomed in all the way" : "Already zoomed out all the way");
 }
 
-// Move the page pointer to the index fingertip, and work out where that is on the graph (if over it).
-function movePointer(tip) {
+// Camera point → page position (mirrored, like a mirror), and → graph position if it's over the graph.
+function viewportPointFor(p) {
   const map = (v, size) => Math.min(size, Math.max(0, (v - HAND.edge) / (1 - 2 * HAND.edge) * size));
-  const raw = { x: map(1 - tip.x, innerWidth), y: map(tip.y, innerHeight) };   // mirrored, like a mirror
+  return { x: map(1 - p.x, innerWidth), y: map(p.y, innerHeight) };
+}
+function canvasPointFor(p) {
+  const v = viewportPointFor(p), r = $("board").getBoundingClientRect();
+  if (document.elementFromPoint(v.x, v.y) !== $("board")) return null;
+  return { x: (v.x - r.left) / r.width * W, y: (v.y - r.top) / r.height * H };
+}
+
+// Move the page pointer to the thumb tip, and work out where that is on the graph (if over it).
+function movePointer(tip) {
+  const raw = viewportPointFor(tip);
   const a = HAND.smoothing;
   pointer = pointer ? { x: pointer.x + a * (raw.x - pointer.x), y: pointer.y + a * (raw.y - pointer.y) } : raw;
   const r = $("board").getBoundingClientRect();
@@ -581,7 +640,7 @@ function clickAt(x, y) {
 }
 
 function oneHand(lm, now) {
-  movePointer(lm[8]);
+  movePointer(lm[4]);                                         // thumb tip = pen and pointer
   if (isFist(lm)) {                                           // ✊ fist: never draw; hold to clear
     mode = "fist"; pinching = false; pinchStart = null;
     if (!fistSince) fistSince = now;
@@ -597,7 +656,7 @@ function oneHand(lm, now) {
   }
   mode = "point"; scrollLastY = null;
   const wasPinching = pinching;
-  const ratio = dist(lm[4], lm[8]) / dist(lm[0], lm[9]);      // pinch size relative to hand size
+  const ratio = pinchRatio(lm);
   if (!pinching && ratio < HAND.pinchOn) pinching = true;
   else if (pinching && ratio > HAND.pinchOff) pinching = false;
   if (pinching && !wasPinching) pinchStart = { t: now, x: pointer.x, y: pointer.y, onCanvas: !!cursor };
@@ -678,9 +737,16 @@ async function start() {
   loop();
 }
 
-function step(hands, now) {      // one frame of hand input (also used by tests)
-  if (hands.length >= 2) twoHands(hands[0], hands[1], now);
-  else { resetTwoHands(); hands.length === 1 ? oneHand(hands[0], now) : noHands(); }
+// One frame of hand input (also used by tests). hands = [{ lm, side }]
+function step(hands, now) {
+  const mainHand = pickMainHand(hands, now);                  // always runs, so the main hand stays tracked
+  if (hands.length >= 2 && isOpenPalm(hands[0].lm) && isOpenPalm(hands[1].lm)) {
+    twoHands(hands[0].lm, hands[1].lm, now);                  // two open palms on purpose → zoom gestures
+  } else {
+    resetTwoHands();
+    if (mainHand) oneHand(mainHand.lm, now);                  // only the main hand points, draws, and clicks
+    else noHands();
+  }
   updatePointerUI();
 }
 
@@ -689,7 +755,9 @@ function loop() {
   if (video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
     const now = performance.now();
-    step(landmarker.detectForVideo(video, now).landmarks ?? [], now);
+    const res = landmarker.detectForVideo(video, now);
+    const sides = res.handednesses ?? res.handedness ?? [];
+    step((res.landmarks ?? []).map((lm, i) => ({ lm, side: sides[i]?.[0]?.categoryName })), now);
   }
   drawFrame();
   requestAnimationFrame(loop);
