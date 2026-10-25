@@ -17,7 +17,7 @@ Hand controls:
 
 If two hands are on screen, the first hand that appeared stays in control of the pen. Another hand can only take over after it has been alone on screen for 2 seconds (a ring fills up while it waits).
 
-**Sticky points:** near a whole or half point like (0, 0), (0, 1) or (0.5, 0), the cursor is pulled toward it. Hold near one for 0.4 seconds (1.2 seconds while drawing, so short pauses mid-line don't lock) and it locks on (a small ring appears). To leave, move about one whole step away (or just a small move while drawing, so leaving a point doesn't drag a long line). Turn this off with the *Sticky points* setting.
+**Sticky points:** near a whole or half point like (0, 0), (0, 1) or (0.5, 0), the cursor is pulled toward it. Hold near one for 0.4 seconds (1.2 seconds while drawing, so short pauses mid-line don't lock) and it locks on (a small ring appears). To leave, move about one whole step away (or just a tiny move while drawing, so leaving a point doesn't drag a line). Turn this off with the *Sticky points* setting.
 
 ## How Claude is used
 - The game's code computes every score, slope, and distance. Claude never does the math.

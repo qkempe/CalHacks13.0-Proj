@@ -642,24 +642,26 @@ const STICK = {
   dwellMs: 400,     // stay near one point this long to lock on
   dwellDrawMs: 1200, // …or this long while pinching/drawing, so a brief pause mid-line doesn't lock
   release: 0.9,     // move this far (graph units) from a locked point to break free
-  releaseDraw: 0.3, // …much less while pinching/drawing, so leaving a point doesn't drag a long line
-                    // (keep it above `near`, or the cursor gets pulled straight back in)
+  releaseDraw: 0.1, // …much less while pinching/drawing, so leaving a point doesn't drag a long line
 };
 let stuck = null;                // {x, y} graph point the cursor is locked to
 let nearPt = null, nearSince = 0;
+let leftPt = null;               // point just broken free from: no pull/lock until you're out of its range
 
 function stickyCursor(c, now) {  // c: cursor from the hand (canvas pixels) → cursor to use
-  if (!c || !$("sticky").checked) { stuck = nearPt = null; return c; }
+  if (!c || !$("sticky").checked) { stuck = nearPt = leftPt = null; return c; }
   const [gx, gy] = toGraph(c.x, c.y);
   const at = p => { const [x, y] = toPx(p.x, p.y); return { x, y }; };
   const pen = pinching || spaceHeld;                          // drawing (or about to)
   if (stuck) {
     if (Math.hypot(gx - stuck.x, gy - stuck.y) < (pen ? STICK.releaseDraw : STICK.release)) return at(stuck);
-    stuck = nearPt = null;                                    // moved far enough: free again
+    leftPt = stuck; stuck = nearPt = null;                    // moved far enough: free again
   }
+  if (leftPt && Math.hypot(gx - leftPt.x, gy - leftPt.y) >= STICK.near) leftPt = null;
   const pt = { x: Math.round(gx / STICK.grid) * STICK.grid, y: Math.round(gy / STICK.grid) * STICK.grid };
   const d = Math.hypot(gx - pt.x, gy - pt.y);
-  if (d >= STICK.near) { nearPt = null; return c; }
+  const justLeft = leftPt && leftPt.x === pt.x && leftPt.y === pt.y;
+  if (d >= STICK.near || justLeft) { nearPt = null; return c; }
   if (!nearPt || nearPt.x !== pt.x || nearPt.y !== pt.y) { nearPt = pt; nearSince = now; }
   if (now - nearSince >= (pen ? STICK.dwellDrawMs : STICK.dwellMs)) { stuck = pt; return at(pt); }
   const k = STICK.pull * (1 - d / STICK.near);                // stronger pull the closer you are
