@@ -160,6 +160,11 @@
       <option value="0.75">🐇 Normal</option>
       <option value="0.4">🚀 Challenge</option>
     </select>
+    <select id="penSpeed" aria-label="Pen speed while drawing">
+      <option value="0.25">🐌 Steady pen</option>
+      <option value="0.4" selected>✍️ Normal pen</option>
+      <option value="0.65">⚡ Fast pen</option>
+    </select>
     <label><input type="checkbox" id="snap" checked>Snap to clean shape</label>
     <label><input type="checkbox" id="contrast">High contrast</label>
   </div>
@@ -241,9 +246,147 @@ const ROUND = 5;           // progress dots: equations checked in this round of 
 let doneInRound = 0;
 
 // ---------- Snapping (clean up a stroke when the pen lifts) ----------
-// Finds the line (degree 1) or parabola (degree 2) closest to the student's OWN points,
-// using least squares. It never looks at the correct answer, so it can't draw it for them.
-// Returns coefficients [c0, c1, c2…] meaning y = c0 + c1·x + c2·x².
+// Nobody's hand is steady in the air, so when the pen lifts we work out what the student MEANT:
+//   1. Steady the stroke: even out the spacing and blur away the shake (keeps the overall shape).
+//   2. Recognise it from the student's OWN points: a straight line (any angle, even vertical),
+//      a curve (a parabola y = a + bx + cx²), or a free shape. It never looks at the correct
+//      answer or the equation type, so a wrong shape stays wrong — it just looks neater.
+//   3. "Snap to clean shape" ON → replace the stroke with that clean line/curve.
+//      OFF → keep the steadied stroke, pulled partway toward the shape it looks like.
+const SHAPE = {
+  spacing: 0.04,      // resample the stroke every 0.04 graph units
+  blur: 0.15,         // blur away shake smaller than about this many graph units
+  lineFit: 0.04,      // a line is "good" if the stroke wanders from it by < 4% of the stroke's size…
+  lineFloor: 0.1,     // …or by less than 0.1 graph units (short strokes)
+  curveBetter: 0.6,   // a curve must fit at least 40% better than a line…
+  curveFit: 0.06,     // …and the stroke wanders from that curve by < 6% of its size…
+  bend: 0.065,        // …and bulge away from a straight chord by > 6.5% of its size (arms swinging in an
+                      //    arc make straight lines bow by up to ~5%, and those should stay lines)
+  bendIfNotLine: 0.05,// if it clearly isn't a line, a 5% bulge is enough
+  bendFloor: 0.2,     // and any curve must bulge by at least 0.2 graph units (bigger than hand shake)
+  pullOff: 0.6,       // snap OFF: move the steadied stroke 60% of the way toward the recognised shape
+};
+const mean = a => a.reduce((s, v) => s + v, 0) / a.length;
+const rms = a => Math.sqrt(mean(a.map(v => v * v)));
+
+// Evenly spaced points along the stroke (removes repeats and speed differences).
+function resample(pts, spacing) {
+  const out = [{ x: pts[0].x, y: pts[0].y }];
+  let carry = 0;
+  for (let i = 1; i < pts.length; i++) {
+    let a = pts[i - 1]; const b = pts[i], seg = Math.hypot(b.x - a.x, b.y - a.y);
+    if (seg === 0) continue;
+    let t = spacing - carry;
+    while (t <= seg) { out.push({ x: a.x + (b.x - a.x) * t / seg, y: a.y + (b.y - a.y) * t / seg }); t += spacing; }
+    carry = seg - (t - spacing);
+  }
+  const last = pts[pts.length - 1];
+  if (Math.hypot(last.x - out.at(-1).x, last.y - out.at(-1).y) > spacing * 0.3) out.push({ x: last.x, y: last.y });
+  return out;
+}
+// Gaussian blur along the stroke. The ends are held in place so the stroke doesn't shrink.
+function blur(pts, sigmaPts) {
+  if (sigmaPts < 0.5 || pts.length < 3) return pts.map(p => ({ ...p }));
+  const r = Math.ceil(sigmaPts * 2.5), w = [];
+  for (let k = -r; k <= r; k++) w.push(Math.exp(-(k * k) / (2 * sigmaPts * sigmaPts)));
+  return pts.map((p, i) => {
+    const reach = Math.min(r, i, pts.length - 1 - i);       // shrink the window near the ends
+    let sx = 0, sy = 0, sw = 0;
+    for (let k = -reach; k <= reach; k++) { const q = pts[i + k], wk = w[k + r]; sx += wk * q.x; sy += wk * q.y; sw += wk; }
+    return { x: sx / sw, y: sy / sw };
+  });
+}
+// Best straight line through the points, measuring distance at right angles (works for steep lines too).
+function fitLine(pts) {
+  const cx = mean(pts.map(p => p.x)), cy = mean(pts.map(p => p.y));
+  let sxx = 0, syy = 0, sxy = 0;
+  for (const p of pts) { const dx = p.x - cx, dy = p.y - cy; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+  const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy), ux = Math.cos(ang), uy = Math.sin(ang);
+  const along = p => (p.x - cx) * ux + (p.y - cy) * uy;
+  const project = p => { const t = along(p); return { x: cx + t * ux, y: cy + t * uy }; };
+  const err = rms(pts.map(p => (p.x - cx) * -uy + (p.y - cy) * ux));
+  return { err, project, along, at: t => ({ x: cx + t * ux, y: cy + t * uy }) };
+}
+// Best parabola y = a + bx + cx², if the stroke moves steadily left→right (or right→left).
+function fitCurve(pts) {
+  const xs = pts.map(p => p.x), lo = Math.min(...xs), hi = Math.max(...xs), span = hi - lo;
+  if (span < 0.5) return null;                                // too narrow to be a y = f(x) curve
+  // Does it double back on itself (not a function)? Judged on a very blurred copy, so shake on the
+  // steep parts of a U doesn't count as going backwards.
+  const broad = blur(pts, 0.5 / SHAPE.spacing).map(p => p.x);
+  let travel = 0;
+  for (let i = 1; i < broad.length; i++) travel += Math.abs(broad[i] - broad[i - 1]);
+  if (travel > (Math.max(...broad) - Math.min(...broad)) * 1.2) return null;
+  const coef = fitPolynomial(xs, pts.map(p => p.y), 2);
+  if (!coef) return null;
+  const f = x => coef[0] + coef[1] * x + coef[2] * x * x;
+  const fp = x => coef[1] + 2 * coef[2] * x;
+  const err = rms(pts.map(p => (p.y - f(p.x)) / Math.hypot(1, fp(p.x))));   // right-angle distance (approx.)
+  const chord = (x0 => { const y0 = f(lo), y1 = f(hi), L = Math.hypot(span, y1 - y0);   // biggest bulge from the chord
+    let m = 0;
+    for (let i = 0; i <= 40; i++) { const x = lo + span * i / 40;
+      m = Math.max(m, Math.abs((x - lo) * (y1 - y0) - (f(x) - y0) * span) / L); }
+    return m; })();
+  return { err, f, lo, hi, bulge: chord };
+}
+// What is this stroke? → { kind: "line" | "curve" | "free", clean: points of the clean shape }
+function recognise(pts) {
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const size = Math.hypot(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  const line = fitLine(pts), curve = fitCurve(pts);
+  const lineOk = line.err < Math.max(SHAPE.lineFit * size, SHAPE.lineFloor);
+  const curveFits = curve && curve.err < SHAPE.curveFit * size && curve.err < line.err * SHAPE.curveBetter;
+  const bends = curve && curve.bulge > Math.max(SHAPE.bendFloor, (lineOk ? SHAPE.bend : SHAPE.bendIfNotLine) * size);
+  if (curveFits && bends) {                                   // a real bend, not a slightly bowed line
+    const n = Math.max(2, Math.round((curve.hi - curve.lo) / SHAPE.spacing));
+    const clean = Array.from({ length: n + 1 }, (_, i) => { const x = curve.lo + (curve.hi - curve.lo) * i / n; return { x, y: curve.f(x) }; });
+    if (xs[0] > xs.at(-1)) clean.reverse();                   // keep the direction it was drawn in
+    return { kind: "curve", clean, toward: p => ({ x: p.x, y: curve.f(p.x) }) };
+  }
+  if (lineOk) {
+    const ts = pts.map(line.along), t0 = ts[0], t1 = ts.at(-1);
+    const a = Math.min(...ts), b = Math.max(...ts), n = Math.max(2, Math.round((b - a) / SHAPE.spacing));
+    const clean = Array.from({ length: n + 1 }, (_, i) => line.at(a + (b - a) * i / n));
+    if (t0 > t1) clean.reverse();
+    return { kind: "line", clean, toward: line.project };
+  }
+  return { kind: "free", clean: pts, toward: p => p };
+}
+// Clean up trace[start…] (the stroke that just finished) in place.
+function snapStroke(start) {
+  if (start < 0) return;
+  let end = start;
+  while (end + 1 < trace.length && trace[end + 1].drawing) end++;
+  const raw = trace.slice(start, end + 1);
+  if (raw.length < 3) return;
+  let pts = resample(raw, SHAPE.spacing);
+  pts = blur(pts, SHAPE.blur / SHAPE.spacing);
+  let out = pts, kind = "free";
+  if (pts.length >= 8) {
+    const shape = recognise(pts); kind = shape.kind;
+    out = $("snap").checked ? shape.clean
+      : pts.map(p => { const q = shape.toward(p); return { x: p.x + SHAPE.pullOff * (q.x - p.x), y: p.y + SHAPE.pullOff * (q.y - p.y) }; });
+  }
+  trace.splice(start, end - start + 1, ...out.map(p => ({ x: p.x, y: p.y, drawing: true })));
+  lastShape = kind;
+  lastStroke = { start, end: start + out.length - 1, at: performance.now() };
+}
+let lastShape = null;      // what the last stroke was recognised as (handy when tuning)
+let lastStroke = null;     // { start, end, at } of the last cleaned-up stroke, so a new stroke can join it
+
+// Starting a new stroke right where the last one ended (soon after) carries on the SAME stroke,
+// so a line drawn in two goes is recognised as one line instead of two crooked pieces.
+const JOIN = { dist: 0.35, ms: 4000 };   // within 0.35 graph units and 4 seconds
+function joinStroke(penAt) {
+  const s = lastStroke;
+  if (!s || performance.now() - s.at > JOIN.ms || !trace[s.end]?.drawing) return -1;
+  const tail = trace[s.end];
+  if (Math.hypot(tail.x - penAt.x, tail.y - penAt.y) > JOIN.dist) return -1;
+  trace.splice(s.end + 1, trace.length - 1 - (s.end + 1));   // drop the hover points between the two strokes
+  return s.start;
+}
+
+// Least squares polynomial: coefficients [c0, c1, c2…] meaning y = c0 + c1·x + c2·x².
 function fitPolynomial(xs, ys, degree) {
   const n = degree + 1;
   const A = Array.from({ length: n }, (_, j) =>
@@ -262,20 +405,6 @@ function fitPolynomial(xs, ys, degree) {
     }
   }
   return b.map((v, i) => v / A[i][i]);
-}
-function snapStroke(start) {
-  if (!$("snap").checked || start < 0) return;
-  let end = start;
-  while (end + 1 < trace.length && trace[end + 1].drawing) end++;
-  const stroke = trace.slice(start, end + 1);
-  if (stroke.length < 8) return;                              // too short to judge its shape
-  const xs = stroke.map(p => p.x), ys = stroke.map(p => p.y);
-  if (Math.max(...xs) - Math.min(...xs) < 0.5) return;        // nearly vertical: leave as drawn
-  const coef = fitPolynomial(xs, ys, level.snap === "curve" ? 2 : 1);
-  if (!coef) return;
-  for (let i = start; i <= end; i++) {
-    trace[i].y = coef.reduce((s, c, k) => s + c * trace[i].x ** k, 0);   // keep x, clean up y
-  }
 }
 function finishStroke() {                                     // pen lifted (or Check pressed)
   if (wasDrawing) snapStroke(strokeStart);
@@ -529,7 +658,6 @@ function render(drawing = false) {
 //
 // Tuning knobs (test these on a real webcam and adjust):
 const HAND = {
-  smoothing: 0.35,          // lower = smoother but laggier pointer
   edge: 0.12,               // ignore this much of each camera edge, so you can reach every corner of the page
   pinchOn: 0.3, pinchOff: 0.45,   // pinch closes below / opens above this (thumb–index gap ÷ hand size)
   tapMs: 600, tapMovePx: 50,      // a "click" = pinch released within 600 ms, moving less than 50 px
@@ -647,11 +775,57 @@ function canvasPointFor(p) {
   return { x: (v.x - r.left) / r.width * W, y: (v.y - r.top) / r.height * H };
 }
 
+// ----- Steady pen -----
+// 1. A "One Euro" filter steadies the hand: lots of smoothing when you move slowly (that's when
+//    shake shows), little when you move fast (so the pointer doesn't lag behind big moves).
+// 2. While the pen is down, the pen moves only a fraction of what your hand moves (the "Pen speed"
+//    setting), so small shakes become tiny on the graph. After you lift the pen it stays where you
+//    stopped while it's over the graph; once it leaves the graph it glides back under your hand,
+//    so you can still reach every button.
+const PEN = {
+  pointFilter: { minCutoff: 1.5, beta: 0.006 },   // pointing at buttons: responsive
+  drawFilter:  { minCutoff: 0.7, beta: 0.003 },   // drawing: steadier (lower = smoother, more lag)
+  returnMs: 250,          // off the graph, the pointer catches up with your hand over ~this long
+};
+const penGain = () => parseFloat($("penSpeed").value);     // pen distance ÷ hand distance while drawing
+class OneEuro {                  // https://gery.casiez.net/1euro/ (one axis)
+  reset() { this.x = this.dx = this.t = null; }
+  filter(x, tSec, { minCutoff, beta }) {
+    const alpha = (cutoff, dt) => 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
+    if (this.x === null || this.x === undefined) { this.x = x; this.dx = 0; this.t = tSec; return x; }
+    const dt = Math.max(1e-3, tSec - this.t); this.t = tSec;
+    const dx = (x - this.x) / dt;
+    this.dx += alpha(1, dt) * (dx - this.dx);                 // smoothed speed
+    this.x += alpha(minCutoff + beta * Math.abs(this.dx), dt) * (x - this.x);
+    return this.x;
+  }
+}
+const steadyX = new OneEuro(), steadyY = new OneEuro();
+let handAt = null;               // steadied hand position (viewport pixels), last frame
+let penOffset = { x: 0, y: 0 };  // pointer − hand: grows while drawing slowly, shrinks to 0 after
+let lastMoveT = 0;
+const penIsDown = () => (pinching && !!pinchStart?.onCanvas) || spaceHeld;
+
 // Move the page pointer to the thumb tip, and work out where that is on the graph (if over it).
-function movePointer(tip) {
+function movePointer(tip, now) {
   const raw = viewportPointFor(tip);
-  const a = HAND.smoothing;
-  pointer = pointer ? { x: pointer.x + a * (raw.x - pointer.x), y: pointer.y + a * (raw.y - pointer.y) } : raw;
+  if (!pointer) { steadyX.reset(); steadyY.reset(); handAt = null; penOffset = { x: 0, y: 0 }; }
+  const down = penIsDown(), opts = down ? PEN.drawFilter : PEN.pointFilter;
+  const hand = { x: steadyX.filter(raw.x, now / 1000, opts), y: steadyY.filter(raw.y, now / 1000, opts) };
+  if (handAt) {
+    const dt = Math.max(0, now - lastMoveT);
+    if (down) {                  // pen down: only move a fraction of the hand's movement
+      const k = penGain() - 1;
+      penOffset.x += k * (hand.x - handAt.x); penOffset.y += k * (hand.y - handAt.y);
+    } else if (!cursor) {        // pen up and off the graph: glide back under the hand (to reach buttons)
+      const decay = Math.exp(-dt / PEN.returnMs);
+      penOffset.x *= decay; penOffset.y *= decay;
+    }                            // pen up over the graph: stay put, so you can carry on from where you stopped
+  }
+  handAt = hand; lastMoveT = now;
+  pointer = { x: Math.min(innerWidth, Math.max(0, hand.x + penOffset.x)),
+              y: Math.min(innerHeight, Math.max(0, hand.y + penOffset.y)) };
+  penOffset = { x: pointer.x - hand.x, y: pointer.y - hand.y };   // don't build up an offset past the screen edge
   const r = $("board").getBoundingClientRect();
   const under = document.elementFromPoint(pointer.x, pointer.y);
   cursor = under === $("board")
@@ -679,7 +853,7 @@ function clickAt(x, y) {
 const fistProgress = now => Math.min(1, Math.max(0, (now - fistSince - HAND.fistConfirmMs) / HAND.fistMs));
 
 function oneHand(lm, now) {
-  movePointer(lm[4]);                                         // thumb tip = pen and pointer
+  movePointer(lm[4], now);                                    // thumb tip = pen and pointer
   // ✊ Fist = clear. A pinch always wins: no fist while pinching, or just after letting go of one,
   // and a fist has to be held steady for fistConfirmMs before it counts.
   if (!pinching && now - pinchEndedAt > HAND.fistAfterPinchMs && isFist(lm)) {
@@ -775,9 +949,15 @@ function drawFrame() {           // record the pen and redraw (also used by test
   if (cursor) {
     const [gx, gy] = toGraph(cursor.x, cursor.y);
     trace.push({ x: gx, y: gy, drawing });
-    if (trace.length > 5000) { trace.shift(); if (strokeStart > 0) strokeStart--; }
+    if (trace.length > 5000) {
+      trace.shift(); if (strokeStart > 0) strokeStart--;
+      if (lastStroke) { lastStroke.start--; lastStroke.end--; if (lastStroke.start < 0) lastStroke = null; }
+    }
   }
-  if (drawing && !wasDrawing) { strokeStart = trace.length - 1; wasDrawing = true; } // pen down
+  if (drawing && !wasDrawing) {                                                         // pen down
+    const joined = joinStroke(trace.at(-1));
+    strokeStart = joined >= 0 ? joined : trace.length - 1; wasDrawing = true;
+  }
   else if (!drawing && wasDrawing) finishStroke();                                     // pen up → snap
   render(drawing);
 }
@@ -791,7 +971,7 @@ function renderDots() {                  // green = checked this round, yellow =
   }));
 }
 function clearDrawing() {                // same equation, fresh start (also lets you retry after Check)
-  trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1;
+  trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1; lastStroke = null;
   $("result").replaceChildren();
 }
 function newEquation() {

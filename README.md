@@ -15,6 +15,13 @@ Hand controls:
 
 Zoom with the − / + buttons in the corner of the graph, or the + and − keys.
 
+Steady drawing (nobody's hand is steady in the air):
+- While you draw, the pen moves only part of what your hand moves, so shakes stay small. Change this with the **Pen speed** setting (Steady / Normal / Fast). After you lift the pen it stays where you stopped while it's over the graph, and catches up with your hand when you move off the graph to the buttons.
+- When you lift the pen, the game works out what you meant from your own stroke: a straight line (any angle), a curve, or a free shape. It never looks at the answer, so a wrong shape stays wrong; it just looks neater.
+  - **Snap to clean shape ON:** the stroke becomes that clean line or curve.
+  - **OFF:** the shake is smoothed out and the stroke is pulled partway toward the shape.
+- Start a new stroke right where the last one ended (within a few seconds) to carry on the same line or curve.
+
 If several people are on camera, the person closest to the camera gets the pen; hands of people in the background are ignored. Once a hand has the pen it keeps it. Another hand can take over after 2 seconds if the main hand has left, or after 1 second if it is clearly closer to the camera (a ring fills up while it waits). If the main hand is gone for 1.5 seconds, the game resets and gives the pen to the closest hand right away. For a few seconds after you lower your hand, much smaller hands (people behind you) still can't grab it.
 
 
