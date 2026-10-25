@@ -13,7 +13,9 @@ Everything fits on one screen: the title top-left, the ⬅ Previous / 🧽 Clear
 
 Hand controls:
 - Quick pinch on a button, checkbox, or dropdown to click it
-- Make a tight fist and hold it for about 1 second to clear (a ring fills up). Pinching always wins, so curling your fingers while drawing won't clear
+- 👍 Thumbs up and hold it for about 0.7 seconds to check (a green ring fills up). Your score pops up right on the graph (close it with ✕, Clear, Next or Previous)
+- ✊ Make a tight fist with your thumb tucked in and hold it for about 1 second to clear (a ring fills up). Pinching always wins, so curling your fingers while drawing won't clear
+- The two can't be mixed up: a thumbs up needs the thumb sticking well out and pointing up, a fist needs it tucked in, and anything in between does nothing. After a thumbs-up check, a fist can't clear until you've opened your hand, so putting your thumb down never wipes your result
 
 Zoom with the − / + buttons in the corner of the graph, or the + and − keys.
 
