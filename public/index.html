@@ -98,27 +98,35 @@
   #handPointer.pinch { background:var(--cursor); }
   .hand-hover { outline:5px solid var(--cursor); outline-offset:3px; }
   #toast {
-    position:fixed; left:50%; top:calc(var(--head) + 16px); transform:translateX(-50%); z-index:1001; display:none;
+    position:fixed; left:50%; bottom:28px; transform:translateX(-50%); z-index:1001; display:none;   /* bottom: never covers the score */
     font-family:"Fredoka", sans-serif; font-size:1.4rem; font-weight:600; padding:10px 22px;
     background:var(--card); color:var(--ink); border:4px solid var(--ink); border-radius:999px; box-shadow:0 5px 0 var(--ink);
   }
   #status b { white-space:nowrap; }
 
-  /* Score pop-up: appears over the top of the graph after Check (button, Enter, or 👍) */
+  /* Score card. Pops up over the top of the graph after Check (button, Enter or ✌️), then after ~2 s
+     moves into the side panel under the equation, out of the way. Clear / Next / Previous remove it. */
   #result {
+    position:relative; display:flex; align-items:center; gap:12px; padding:12px 48px 12px 14px;
+    background:var(--card); border:4px solid var(--ink); border-radius:22px; box-shadow:0 6px 0 var(--ink);
+    font-size:1.05rem; font-weight:800; animation:slideIn .4s ease-out;
+  }
+  #result.popup {
     position:absolute; z-index:3; top:14px; left:50%; transform:translateX(-50%); width:min(88%, 640px);
-    display:flex; align-items:center; gap:14px; padding:14px 52px 14px 18px;
-    background:var(--card); border:4px solid var(--ink); border-radius:22px; box-shadow:0 8px 0 var(--ink);
-    font-size:1.2rem; font-weight:800; animation:pop .35s cubic-bezier(.2,1.6,.4,1);
+    gap:14px; padding:14px 52px 14px 18px; box-shadow:0 8px 0 var(--ink); font-size:1.2rem;
+    animation:pop .35s cubic-bezier(.2,1.6,.4,1);
   }
   @keyframes pop { from { transform:translateX(-50%) scale(.6); opacity:0; } to { transform:translateX(-50%) scale(1); opacity:1; } }
+  @keyframes slideIn { from { transform:translateX(-40px); opacity:0; } to { transform:none; opacity:1; } }
   #result .close {
     position:absolute; top:8px; right:8px; width:36px; height:36px; padding:0; border-radius:50%;
     font-size:1.1rem; border-width:3px; box-shadow:0 3px 0 var(--ink); background:var(--card); color:var(--ink);
   }
   #result:empty { display:none; }
-  #result::before { content:"🦉"; font-size:2.6rem; }
-  #result .score { flex:none; font-family:"Fredoka", sans-serif; font-size:2rem; background:var(--yellow); color:#1f2a44; border-radius:16px; padding:6px 14px; text-align:center; line-height:1.1; }
+  #result::before { content:"🦉"; font-size:2rem; }
+  #result.popup::before { font-size:2.6rem; }
+  #result .score { flex:none; font-family:"Fredoka", sans-serif; font-size:1.6rem; background:var(--yellow); color:#1f2a44; border-radius:16px; padding:6px 12px; text-align:center; line-height:1.1; }
+  #result.popup .score { font-size:2rem; padding:6px 14px; }
   #result .score small { display:block; font-size:1rem; }
 
   #status {
@@ -149,7 +157,6 @@
     main.app { flex-direction:column; align-items:center; height:auto; }
     #stage { width:100%; height:auto; min-height:0; }
     .panel { width:100%; max-width:640px; max-height:none; overflow:visible; }
-    #toast { top:20px; }
   }
   @media (max-width:600px) {
     #eq { font-size:1.8rem; }
@@ -184,6 +191,7 @@
     <span class="eq-label">Trace this!</span>
     <div id="eq">Loading…</div>
   </section>
+  <div id="resultDock"></div>
   <div class="settings">
     <select id="kind" aria-label="Kind of equations">
       <option value="mix">📈 Lines + curves</option>
@@ -207,7 +215,7 @@
   <div id="status">
     <b>👍 Your thumb is the pen:</b> tap your pointer finger onto it and hold on the graph to draw ·
     <b>👌 Quick pinch</b> on a button to click ·
-    <b>👍 Thumbs up</b> to check ·
+    <b>✌️ Peace sign</b> to check ·
     <b>✊ Fist</b> (thumb tucked in) for 1 second to clear
   </div>
   </aside>
@@ -283,8 +291,9 @@ let pinching = false, spaceHeld = false, revealed = false;
 let wasDrawing = false;    // was the pen down on the previous frame?
 let strokeStart = -1;      // index in `trace` where the current stroke began
 let fistSince = 0, fistUsed = false;   // for "hold a fist to clear"
-let thumbSince = 0, thumbSeenAt = 0, thumbUsed = false;   // for "hold a thumbs up to check"
-let clearLocked = false;   // after a thumbs-up check, a fist can't clear until the hand has opened
+let peaceSince = 0, peaceSeenAt = 0, peaceUsed = false;   // for "hold a peace sign to check"
+let clearLocked = false;   // after a peace-sign check, a fist can't clear until the hand has opened (or pinched)
+let lockToldAt = 0;        // when we last said "open your hand first"
 let pinchEndedAt = -Infinity;          // when the last pinch was released
 let feedbackId = 0;
 const ROUND = 5;           // progress dots: equations checked in this round of 5
@@ -675,8 +684,23 @@ const MESSAGES = {
   off_screen: "The graph is off the screen. Try zooming out with the − button.",
 };
 const pct = v => `${Math.round(v * 100)}%`;
+// The score card pops up over the graph, then after RESULT_DOCK_MS moves into the side panel.
+const RESULT_DOCK_MS = 2000;
+let dockTimer = 0;
+function popUpResult() {
+  clearTimeout(dockTimer);
+  const el = $("result"); $("stage").append(el); el.classList.add("popup");
+  dockTimer = setTimeout(dockResult, RESULT_DOCK_MS);
+}
+function dockResult() {
+  clearTimeout(dockTimer);
+  const el = $("result"); if (!el.classList.contains("popup")) return;
+  el.classList.remove("popup"); $("resultDock").append(el);
+}
+function hideResult() { clearTimeout(dockTimer); $("result").replaceChildren(); dockResult(); }
 async function showResult(r) {
   const id = ++feedbackId;
+  popUpResult();
   const m = r.pieces.find(p => p.mistake)?.mistake;
   const fallback = m ? MESSAGES[m]
     : r.overall >= 80 ? "Amazing — that's the graph!"
@@ -696,7 +720,7 @@ async function showResult(r) {
       msg.append(small);
     }
     const close = document.createElement("button"); close.className = "close"; close.textContent = "✕";
-    close.setAttribute("aria-label", "Close score"); close.onclick = () => $("result").replaceChildren();
+    close.setAttribute("aria-label", "Close score"); close.onclick = hideResult;
     $("result").replaceChildren(badge, msg, close);
   };
   if (m === "missing_piece" || m === "off_screen") return show(fallback);   // no need to ask Claude
@@ -794,11 +818,11 @@ function drawCursor(drawing) {
     ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 28, -Math.PI / 2, -Math.PI / 2 + t * 2 * Math.PI);
     ctx.lineWidth = 6; ctx.strokeStyle = css("--cursor"); ctx.stroke();
   }
-  if (mode === "thumb" && !thumbUsed) {                       // green ring + 👍 while holding a thumbs up
-    const t = thumbProgress(performance.now());
+  if (mode === "peace" && !peaceUsed) {                       // green ring + ✌️ while holding a peace sign
+    const t = peaceProgress(performance.now());
     ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 30, -Math.PI / 2, -Math.PI / 2 + t * 2 * Math.PI);
     ctx.lineWidth = 8; ctx.strokeStyle = css("--green"); ctx.stroke();
-    ctx.font = "28px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("👍", cursor.x, cursor.y - 48);
+    ctx.font = "28px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("✌️", cursor.x, cursor.y - 48);
   }
 }
 function drawTakeover() {                                     // ring fills while a new hand waits to take control
@@ -837,14 +861,18 @@ const HAND = {
   fistConfirmMs: 300,             // a fist must be seen this long before it counts (filters quick blips)
   fistAfterPinchMs: 600,          // no fist for this long after a pinch ends (hands curl as they relax)
   fistCurl: 1.1,                  // fingertip must be within this × the knuckle's distance from the wrist
-  // 👍 Thumbs up = Check. Kept far apart from ✊ fist = clear by WHERE THE THUMB IS: measured as the thumb
-  // tip's distance from the middle of the knuckles ÷ knuckle width. Tested on a 3D hand model at many
-  // angles: thumbs-up ≈ 1.75, fist with the thumb tucked or alongside ≈ 0.8–0.9. In between = neither.
-  thumbOut: 1.3,                  // thumbs up: thumb tip farther out than this…
-  thumbTucked: 1.1,               // …fist (clear): thumb tip closer in than this
-  thumbUpDeg: 50,                 // thumbs up: thumb points within 50° of straight up…
-  thumbAbove: 0.05,               // …and its tip is the highest point of the hand
-  thumbMs: 700,                   // hold a thumbs up this long to check (a ring fills up)
+  // ✊ Fist (clear) also needs the thumb tucked in or along the side, with its tip below the top of
+  // the fist. Resting with your thumb up as the pen (fingers closed) is NOT a fist, so pausing between
+  // strokes can't clear. (Thumb tip's distance from the middle of the knuckles ÷ knuckle width:
+  // real fists ≈ 0.6–1.06 on a 3D hand model; a thumb held up as the pen ≈ 1–1.8.)
+  thumbTucked: 1.2,
+  // ✌️ Peace sign (check): pointer + middle finger straight and spread in a V, ring + pinky curled.
+  // Nothing you do while drawing or clicking looks like this.
+  peaceStraight: 0.8,             // a finger is "straight" if tip-to-knuckle ≥ 80% of its length along the joints
+  peaceReach: 1.35,               // …and its tip is ≥ 1.35× as far from the wrist as its knuckle
+  peaceDown: 1.3,                 // ring + pinky count as down if their tips are within 1.3× their knuckles' distance
+  peaceSpread: 1.3,               // the V: fingertips at least 1.3× as far apart as the two knuckles
+  peaceMs: 600,                   // hold a peace sign this long to check (a ring fills up)
   gestureGapMs: 150,              // a gesture can drop out for this long (a blurry frame) without restarting
 };
 
@@ -872,19 +900,27 @@ function thumbReach(lm) {
   return Math.hypot(t.x - c.x, t.y - c.y, t.z - c.z) / dist3(lm[5], lm[17]);
 }
 const fourCurled = lm => [[8, 5], [12, 9], [16, 13], [20, 17]].every(([tip, knuckle]) => curled(lm, tip, knuckle));
-// ✊ Fist (clear) = four fingers curled AND the thumb tucked in. (Four fingers curled with the thumb
-// sticking out is a thumbs up, not a fist.)
-const isClearFist = lm => fourCurled(lm) && thumbReach(lm) < HAND.thumbTucked;
-// 👍 Thumbs up (check) = four fingers curled, thumb straight, sticking well out, pointing up, and its
-// tip is the highest point of the hand.
-function isThumbsUp(lm) {
-  if (!fourCurled(lm) || thumbReach(lm) < HAND.thumbOut) return false;
-  const straight = dist3(lm[2], lm[4]) / (dist3(lm[2], lm[3]) + dist3(lm[3], lm[4]));
-  const a = px3(lm[2]), t = px3(lm[4]);
-  const fromUp = Math.atan2(Math.abs(t.x - a.x), a.y - t.y) * 180 / Math.PI;
+// Is the thumb tip on top of the hand (higher than every other part, in the picture)? A thumb held up
+// as the pen is; in a real fist it's tucked across or along the fingers, below the top.
+function thumbOnTop(lm) {
   const highestOther = Math.min(...[0, 5, 6, 7, 8, 9, 10, 12, 13, 16, 17, 20].map(i => px3(lm[i]).y));
-  return straight > 0.85 && fromUp < HAND.thumbUpDeg && (highestOther - t.y) / handSize(lm) > HAND.thumbAbove;
+  return (highestOther - px3(lm[4]).y) / handSize(lm) > -0.05;
 }
+// ✊ Fist (clear) = four fingers curled AND the thumb tucked in (not held up like the pen).
+const isClearFist = lm => fourCurled(lm) && thumbReach(lm) < HAND.thumbTucked && !thumbOnTop(lm);
+// ✌️ Peace sign (check): pointer + middle straight and out, spread in a V; ring + pinky down.
+function fingerOut(lm, k, j1, j2, tip) {
+  const along = dist3(lm[k], lm[j1]) + dist3(lm[j1], lm[j2]) + dist3(lm[j2], lm[tip]);
+  return dist3(lm[k], lm[tip]) >= HAND.peaceStraight * along && dist3(lm[tip], lm[0]) >= HAND.peaceReach * dist3(lm[k], lm[0]);
+}
+const fingerDown = (lm, tip, k) => dist3(lm[tip], lm[0]) < HAND.peaceDown * dist3(lm[k], lm[0]);
+function isPeace(lm) {
+  return fingerOut(lm, 5, 6, 7, 8) && fingerOut(lm, 9, 10, 11, 12)
+    && fingerDown(lm, 16, 13) && fingerDown(lm, 20, 17)
+    && dist3(lm[8], lm[12]) >= HAND.peaceSpread * dist3(lm[5], lm[9]);
+}
+// An open-ish hand (3+ fingers out) — used to unlock fist-clear after a check.
+const handOpen = lm => [[8, 5], [12, 9], [16, 13], [20, 17]].filter(([t, k]) => dist3(lm[t], lm[0]) > 1.3 * dist3(lm[k], lm[0])).length >= 3;
 
 // ----- Main hand: who controls the pen -----
 // MediaPipe doesn't say which hand is which from frame to frame, so we follow the main hand
@@ -962,7 +998,7 @@ function pickMainHand(hands, now) {          // hands: front hands, closest firs
 
 let landmarker, lastVideoTime = -1;
 let pointer = null;              // smoothed pointer position on the page (viewport pixels)
-let mode = "none";               // "point" | "fist" | "thumb" | "none"
+let mode = "none";               // "point" | "fist" | "peace" | "none"
 let pinchStart = null;           // where/when the current pinch began: {t, x, y, onCanvas}
 let hoverEl = null;
 
@@ -1102,25 +1138,28 @@ function clickAt(x, y) {
 // 0 → 1 as a confirmed fist is held; 1 = clear.
 const fistProgress = now => Math.min(1, Math.max(0, (now - fistSince - HAND.fistConfirmMs) / HAND.fistMs));
 
-const thumbProgress = now => Math.min(1, Math.max(0, (now - thumbSince) / HAND.thumbMs));
+const peaceProgress = now => Math.min(1, Math.max(0, (now - peaceSince) / HAND.peaceMs));
 
 function oneHand(lm, now) {
   movePointer(lm[4], now);                                    // thumb tip = pen and pointer
-  // 👍 Thumbs up = check. Held for thumbMs (a green ring fills). Never while drawing.
-  if (!pinching && isThumbsUp(lm)) {
-    if (!thumbSince || now - thumbSeenAt > HAND.gestureGapMs) { thumbSince = now; thumbUsed = false; }
-    thumbSeenAt = now; mode = "thumb"; fistSince = 0;
-    if (!thumbUsed && thumbProgress(now) >= 1) {
-      thumbUsed = true;
-      clearLocked = true;                                     // lowering the thumb into a fist must not clear
+  // ✌️ Peace sign = check, held for peaceMs (a green ring fills). Never while drawing. Only frames that
+  // really are a peace sign do anything here — every other frame goes on to the normal pinch/fist logic.
+  if (!pinching && isPeace(lm)) {
+    if (!peaceSince || now - peaceSeenAt > HAND.gestureGapMs) { peaceSince = now; peaceUsed = false; }
+    peaceSeenAt = now; mode = "peace"; fistSince = 0;
+    if (!peaceUsed && peaceProgress(now) >= 1) {
+      peaceUsed = true;
+      clearLocked = true;                                     // folding the fingers into a fist must not clear
       if (revealed) toast("Already checked: 🧽 Clear to retry, or Next ➜");
       else check();
     }
     return;
   }
-  if (thumbSince && now - thumbSeenAt <= HAND.gestureGapMs) { mode = "thumb"; return; }   // a blurry frame
-  thumbSince = 0;
-  if (!fourCurled(lm)) clearLocked = false;                  // the hand opened: fist-clear allowed again
+  if (now - peaceSeenAt > HAND.gestureGapMs) peaceSince = 0;  // (a single blurry frame doesn't restart it)
+  if (pinching || handOpen(lm)) clearLocked = false;          // the hand opened (or pinched): fist-clear allowed again
+  if (clearLocked && isClearFist(lm)) {                       // tell them once why the fist isn't clearing
+    if (!lockToldAt || now - lockToldAt > 4000) { toast("Open your hand first, then ✊ to clear"); lockToldAt = now; }
+  }
   // ✊ Fist (thumb tucked in) = clear. A pinch always wins: no fist while pinching, or just after letting
   // go of one, and a fist has to be held steady for fistConfirmMs before it counts.
   if (!pinching && !clearLocked && now - pinchEndedAt > HAND.fistAfterPinchMs && isClearFist(lm)) {
@@ -1156,7 +1195,7 @@ let handSeenAt = -Infinity;      // when the main hand was last seen
 function noHands() {
   handGraph = null;
   mode = "none"; pointer = null; cursor = null; pinching = false; pinchStart = null; fistSince = 0; openSince = 0;
-  thumbSince = 0;                  // (clearLocked stays on: only seeing the hand OPEN unlocks fist-clear)
+  peaceSince = 0;                  // (clearLocked stays on: only seeing the hand OPEN unlocks fist-clear)
 }
 
 // Show the page pointer (hidden over the graph, where the graph's own cursor shows) and highlight what it would click.
@@ -1167,12 +1206,12 @@ function updatePointerUI() {
   if (show) {
     el.style.transform = `translate(${pointer.x}px, ${pointer.y}px)`;
     el.className = pinching ? "pinch" : "";
-    el.textContent = mode === "fist" ? "✊" : mode === "thumb" ? "👍" : "";
-    el.style.background = mode === "thumb" && !thumbUsed       // green ring fills while holding a thumbs up
-      ? `conic-gradient(var(--green) ${thumbProgress(performance.now()) * 360}deg, #ffffff99 0)` : "";
+    el.textContent = mode === "fist" ? "✊" : mode === "peace" ? "✌️" : "";
+    el.style.background = mode === "peace" && !peaceUsed       // green ring fills while holding a peace sign
+      ? `conic-gradient(var(--green) ${peaceProgress(performance.now()) * 360}deg, #ffffff99 0)` : "";
   }
   const target = show && mode === "point" ? clickableAt(pointer.x, pointer.y) : null;
-  if (mode === "thumb" && !thumbUsed && thumbProgress(performance.now()) < 0.05 && !revealed) toast("👍 Hold it… checking");
+  if (mode === "peace" && !peaceUsed && peaceProgress(performance.now()) < 0.05 && !revealed) toast("✌️ Hold it… checking");
   if (target !== hoverEl) {
     hoverEl?.classList.remove("hand-hover");
     target?.classList.add("hand-hover");
@@ -1256,7 +1295,7 @@ function renderDots() {                  // green = checked this round, yellow =
 }
 function clearDrawing() {                // same equation, fresh start (also lets you retry after Check)
   trace = []; revealed = false; feedbackId++; wasDrawing = false; strokeStart = -1; lastStroke = null; pendingSnap = null;
-  $("result").replaceChildren();
+  hideResult();
 }
 // Previous / Next work like a browser's back / forward: Previous goes back to earlier equations, and
 // after going back, Next steps forward through them again before making brand-new ones.
