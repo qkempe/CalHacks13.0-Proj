@@ -300,11 +300,34 @@ function drawGrid() {
   ctx.lineWidth = 3; ctx.strokeStyle = css("--axis");
   const [ox, oy] = toPx(0, 0);
   ctx.beginPath(); ctx.moveTo(ox, 0); ctx.lineTo(ox, H); ctx.moveTo(0, oy); ctx.lineTo(W, oy); ctx.stroke();
-  ctx.fillStyle = css("--axis"); ctx.font = "bold 16px Nunito, sans-serif";
-  ctx.textAlign = "center"; ctx.textBaseline = "top";
-  for (let v = XMIN + 1; v < XMAX; v++) if (v) { const [px] = toPx(v, 0); ctx.fillText(v, px, oy + 6); }
-  ctx.textAlign = "right"; ctx.textBaseline = "middle";
-  for (let v = YMIN + 1; v < YMAX; v++) if (v) { const [, py] = toPx(0, v); ctx.fillText(v, ox - 8, py); }
+  drawAxisNumbers(ox, oy);
+}
+
+// Numbers along each axis, plus "x" and "y" names.
+// Each label gets an outline in the background color so it stays readable over grid lines.
+function drawAxisNumbers(ox, oy) {
+  const fmt = v => (v < 0 ? "−" + -v : String(v));          // real minus sign reads better than "-"
+  ctx.font = "bold 18px Nunito, system-ui, sans-serif";
+  ctx.lineWidth = 5; ctx.lineJoin = "round";
+  ctx.strokeStyle = css("--bg"); ctx.fillStyle = css("--ink");
+  const label = (text, x, y, align, baseline) => {
+    ctx.textAlign = align; ctx.textBaseline = baseline;
+    ctx.strokeText(text, x, y); ctx.fillText(text, x, y);
+  };
+  for (let v = XMIN + 1; v < XMAX; v++) {                  // skip the edges so labels aren't cut off
+    if (v === 0) continue;
+    const [px] = toPx(v, 0);
+    label(fmt(v), px, oy + 6, "center", "top");             // under the x-axis
+  }
+  for (let v = YMIN + 1; v < YMAX; v++) {
+    if (v === 0) continue;
+    const [, py] = toPx(0, v);
+    label(fmt(v), ox - 8, py, "right", "middle");           // left of the y-axis
+  }
+  label("0", ox - 8, oy + 6, "right", "top");
+  ctx.font = "italic bold 22px Fredoka, system-ui, sans-serif";
+  label("x", W - 10, oy - 8, "right", "bottom");
+  label("y", ox + 10, 8, "left", "top");
 }
 function drawAnswer() {
   ctx.lineWidth = 5; ctx.strokeStyle = css("--answer"); ctx.setLineDash([12, 8]);
