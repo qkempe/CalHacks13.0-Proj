@@ -632,13 +632,15 @@ function movePointer(tip) {
 
 // ----- Sticky points: steadier aim on whole and half points like (0, 0), (0, 1), (0.5, 0) -----
 // Near a point the cursor is pulled toward it (so hand shake moves it less). Stay near the same
-// point for STICK.dwellMs and it locks on. To leave, the hand has to move STICK.release graph
+// point for STICK.dwellMs (longer, STICK.dwellDrawMs, while drawing) and it locks on.
+// To leave, the hand has to move STICK.release graph
 // units away, about one whole step, e.g. from (0, 0) out toward (0, 1).
 const STICK = {
   grid: 0.5,        // points every half unit
   near: 0.2,        // within this many graph units, the pull starts
   pull: 0.6,        // how strongly it pulls at the very center (0 = none, 1 = jump right onto it)
   dwellMs: 400,     // stay near one point this long to lock on
+  dwellDrawMs: 1200, // …or this long while pinching/drawing, so a brief pause mid-line doesn't lock
   release: 0.9,     // move this far (graph units) from a locked point to break free
 };
 let stuck = null;                // {x, y} graph point the cursor is locked to
@@ -656,7 +658,8 @@ function stickyCursor(c, now) {  // c: cursor from the hand (canvas pixels) → 
   const d = Math.hypot(gx - pt.x, gy - pt.y);
   if (d >= STICK.near) { nearPt = null; return c; }
   if (!nearPt || nearPt.x !== pt.x || nearPt.y !== pt.y) { nearPt = pt; nearSince = now; }
-  if (now - nearSince >= STICK.dwellMs) { stuck = pt; return at(pt); }
+  const dwell = pinching || spaceHeld ? STICK.dwellDrawMs : STICK.dwellMs;
+  if (now - nearSince >= dwell) { stuck = pt; return at(pt); }
   const k = STICK.pull * (1 - d / STICK.near);                // stronger pull the closer you are
   return at({ x: gx + (pt.x - gx) * k, y: gy + (pt.y - gy) * k });
 }
